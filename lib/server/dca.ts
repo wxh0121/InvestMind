@@ -249,7 +249,7 @@ const refreshHoldingPrice = async (holding: Holding): Promise<NormalizedUpdate> 
     return { ...price, source: "OKX" };
   }
 
-  if (holding.dataSource === "YAHOO" || (holding.dataSource as string) === "BINANCE") {
+  if (holding.dataSource === "YAHOO") {
     const price = (await getYahooPrices([{ symbol: holding.symbol, market: holding.market }]))[0];
     if (!price) throw new Error("Yahoo Finance 未返回价格");
     return price;

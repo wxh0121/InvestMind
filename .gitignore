@@ -7,4 +7,3 @@ dist
 *.tsbuildinfo
 .env*
 !.env.example
-reports/

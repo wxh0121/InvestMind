@@ -13,10 +13,9 @@ import { computeNextDcaRunAt } from "@/utils/dcaSchedule";
 
 const SETTINGS_KEY = "portfolio";
 
-type LegacyDataSource = DataSource | "BINANCE";
+type LegacyDataSource = DataSource;
 type LegacyAssetType = AssetType | "ETF" | "FUND" | "CASH" | "THEMATIC_FUND";
 type LegacyDataSourceSettings = Partial<PortfolioSettings["dataSources"]> & {
-  binanceEnabled?: boolean;
 };
 
 type LegacyPortfolioSettings = Omit<Partial<PortfolioSettings>, "dataSources"> & {
@@ -33,7 +32,6 @@ export interface BackupPayload {
 }
 
 const normalizeDataSource = (dataSource: unknown): DataSource => {
-  if (dataSource === "BINANCE") return "YAHOO";
   if (
     dataSource === "OKX" ||
     dataSource === "YAHOO" ||
@@ -90,7 +88,6 @@ const normalizeSettings = (settings?: LegacyPortfolioSettings): PortfolioSetting
     okxEnabled: settings?.dataSources?.okxEnabled ?? DEFAULT_SETTINGS.dataSources.okxEnabled,
     yahooEnabled:
       settings?.dataSources?.yahooEnabled ??
-      settings?.dataSources?.binanceEnabled ??
       DEFAULT_SETTINGS.dataSources.yahooEnabled,
     eastmoneyEnabled:
       settings?.dataSources?.eastmoneyEnabled ?? DEFAULT_SETTINGS.dataSources.eastmoneyEnabled

@@ -19,9 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .filter((holding) => holding.dataSource === "OKX")
       .map((holding) => holding.symbol)
   );
-  const yahooHoldings = holdings.filter(
-    (holding) => holding.dataSource === "YAHOO" || holding.dataSource === "BINANCE"
-  );
+  const yahooHoldings = holdings.filter((holding) => holding.dataSource === "YAHOO");
   const fundSymbols = unique(
     holdings
       .filter((holding) => holding.dataSource === "EASTMONEY")
