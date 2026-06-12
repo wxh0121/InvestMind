@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "binance:us-stocks": "node scripts/binance-us-stock-trades.mjs"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",

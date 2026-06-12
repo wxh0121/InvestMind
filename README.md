@@ -139,6 +139,27 @@ API Key 只在 `api/` 目录下的 Vercel Functions 中读取，不会进入前�
 
 更换浏览器、清理站点数据、无痕模式或系统清理工具可能删除本地数据；登录账号后可从云端恢复，离线 JSON 备份仍建议保留。
 
+## Binance 交易记录脚本
+
+项目提供独立脚本用于读取 Binance Spot 交易记录，并按交易对计算当前持仓、加仓历史、平均成本、已实现盈亏和未实现盈亏。
+
+在 `.env.local` 中配置，不要提交真实密钥：
+
+```bash
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
+BINANCE_STOCK_SYMBOLS=TSLAUSDT,AAPLUSDT
+BINANCE_OUTPUT=reports/binance-us-stock-holdings.json
+```
+
+运行：
+
+```bash
+npm run binance:us-stocks
+```
+
+输出文件默认保存到 `reports/`，该目录已被 `.gitignore` 忽略。脚本会同时生成 JSON 明细和 `.summary.csv` 汇总。Binance 私有交易记录接口必须逐个 `symbol` 查询，因此需要在 `BINANCE_STOCK_SYMBOLS` 中列出要统计的交易对。
+
 ## 注意事项
 
 - 账号系统依赖 Vercel Postgres / Neon 环境变量；未配置数据库时，登录注册会被拒绝，但本地记录仍可使用。
