@@ -149,6 +149,7 @@ API Key 只在 `api/` 目录下的 Vercel Functions 中读取，不会进入前�
 BINANCE_API_KEY=
 BINANCE_API_SECRET=
 BINANCE_STOCK_SYMBOLS=TSLAUSDT,AAPLUSDT
+BINANCE_SYMBOL_SEARCH=TSLA,AAPL
 BINANCE_OUTPUT=reports/binance-us-stock-holdings.json
 ```
 
@@ -158,7 +159,7 @@ BINANCE_OUTPUT=reports/binance-us-stock-holdings.json
 npm run binance:us-stocks
 ```
 
-输出文件默认保存到 `reports/`，该目录已被 `.gitignore` 忽略。脚本会同时生成 JSON 明细和 `.summary.csv` 汇总。Binance 私有交易记录接口必须逐个 `symbol` 查询，因此需要在 `BINANCE_STOCK_SYMBOLS` 中列出要统计的交易对。
+输出文件默认保存到 `reports/`，该目录已被 `.gitignore` 忽略。脚本会同时生成 JSON 明细和 `.summary.csv` 汇总。Binance 私有交易记录接口必须逐个 `symbol` 查询，因此需要在 `BINANCE_STOCK_SYMBOLS` 中列出要统计的交易对。若交易对无效，脚本会跳过并在 JSON 的 `symbolMatches` 中写入候选搜索结果。
 
 ## 注意事项
 

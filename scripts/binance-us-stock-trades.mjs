@@ -138,27 +138,55 @@ const inferAssetsFromSymbol = (symbol) => {
   };
 };
 
-const getExchangeInfo = async (client, symbols) => {
+const getExchangeInfo = async (client, warnings) => {
   try {
-    const response = await client.publicGet("/api/v3/exchangeInfo", {
-      symbols: JSON.stringify(symbols)
-    });
-    return new Map(
-      (response.symbols ?? []).map((item) => [
-        item.symbol,
-        {
-          symbol: item.symbol,
-          baseAsset: item.baseAsset,
-          quoteAsset: item.quoteAsset,
-          status: item.status
-        }
-      ])
-    );
+    const response = await client.publicGet("/api/v3/exchangeInfo");
+    const records = (response.symbols ?? []).map((item) => ({
+      symbol: item.symbol,
+      baseAsset: item.baseAsset,
+      quoteAsset: item.quoteAsset,
+      status: item.status
+    }));
+
+    return {
+      records,
+      bySymbol: new Map(records.map((item) => [item.symbol, item]))
+    };
   } catch (error) {
-    console.warn(`无法读取 exchangeInfo，将按交易对后缀推断资产：${error.message}`);
-    return new Map();
+    warnings.push(`无法读取 exchangeInfo，将按配置交易对尝试查询：${error.message}`);
+    return {
+      records: [],
+      bySymbol: new Map()
+    };
   }
 };
+
+const getSearchTerms = (configuredSymbols, searchValue) => {
+  const terms = new Set(parseSymbols(searchValue));
+
+  for (const symbol of configuredSymbols) {
+    terms.add(symbol);
+    const inferred = inferAssetsFromSymbol(symbol);
+    if (inferred.baseAsset) terms.add(inferred.baseAsset);
+  }
+
+  return Array.from(terms);
+};
+
+const findSymbolMatches = (exchangeRecords, terms) =>
+  Object.fromEntries(
+    terms.map((term) => [
+      term,
+      exchangeRecords
+        .filter(
+          (item) =>
+            item.symbol.includes(term) ||
+            item.baseAsset.includes(term) ||
+            `${item.baseAsset}${item.quoteAsset}`.includes(term)
+        )
+        .slice(0, 50)
+    ])
+  );
 
 const fetchTradesByFromId = async (client, symbol) => {
   const allTrades = [];
@@ -232,6 +260,8 @@ const fetchSymbolTrades = async (client, symbol, startTime, endTime, warnings) =
 };
 
 const getCurrentPrices = async (client, symbols, warnings) => {
+  if (!symbols.length) return new Map();
+
   try {
     const prices = await client.publicGet("/api/v3/ticker/price", {
       symbols: JSON.stringify(symbols)
@@ -412,6 +442,7 @@ const main = async () => {
   const apiKey = process.env.BINANCE_API_KEY;
   const apiSecret = process.env.BINANCE_API_SECRET;
   const symbols = parseSymbols(process.env.BINANCE_STOCK_SYMBOLS);
+  const searchTerms = getSearchTerms(symbols, process.env.BINANCE_SYMBOL_SEARCH);
   const baseUrl = process.env.BINANCE_BASE_URL || DEFAULT_BASE_URL;
   const output = process.env.BINANCE_OUTPUT || DEFAULT_OUTPUT;
   const recvWindow = Number(process.env.BINANCE_RECV_WINDOW || DEFAULT_RECV_WINDOW);
@@ -438,12 +469,26 @@ const main = async () => {
     recvWindow: Number.isFinite(recvWindow) ? recvWindow : DEFAULT_RECV_WINDOW
   });
 
-  const exchangeInfo = await getExchangeInfo(client, symbols);
-  const currentPrices = await getCurrentPrices(client, symbols, warnings);
+  const exchangeInfo = await getExchangeInfo(client, warnings);
+  const invalidSymbols = exchangeInfo.records.length
+    ? symbols.filter((symbol) => !exchangeInfo.bySymbol.has(symbol))
+    : [];
+  const validSymbols = exchangeInfo.records.length
+    ? symbols.filter((symbol) => exchangeInfo.bySymbol.has(symbol))
+    : symbols;
+  const symbolMatches = exchangeInfo.records.length
+    ? findSymbolMatches(exchangeInfo.records, searchTerms)
+    : {};
+
+  for (const symbol of invalidSymbols) {
+    warnings.push(`${symbol} 不是当前 Binance Spot API 支持的交易对，已跳过。`);
+  }
+
+  const currentPrices = await getCurrentPrices(client, validSymbols, warnings);
   const positions = [];
 
-  for (const symbol of symbols) {
-    const assetInfo = exchangeInfo.get(symbol) ?? {
+  for (const symbol of validSymbols) {
+    const assetInfo = exchangeInfo.bySymbol.get(symbol) ?? {
       symbol,
       ...inferAssetsFromSymbol(symbol),
       status: "UNKNOWN"
@@ -459,9 +504,12 @@ const main = async () => {
     config: {
       baseUrl,
       symbols,
+      validSymbols,
+      invalidSymbols,
       startTime: toIso(startTime),
       endTime: toIso(endTime)
     },
+    symbolMatches,
     warnings,
     positions
   };
