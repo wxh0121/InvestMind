@@ -3,6 +3,14 @@ import type { DcaFrequency, DcaPlan } from "@/types/dcaPlan";
 const pad = (value: number) => String(value).padStart(2, "0");
 
 const isFuture = (candidate: Date, from: Date) => candidate.getTime() > from.getTime();
+const isWeekend = (date: Date) => date.getDay() === 0 || date.getDay() === 6;
+
+const moveToNextWeekday = (candidate: Date) => {
+  while (isWeekend(candidate)) {
+    candidate.setDate(candidate.getDate() + 1);
+  }
+  return candidate;
+};
 
 export const normalizeDcaHour = (hour?: number) =>
   Number.isInteger(hour) && hour !== undefined ? Math.min(Math.max(hour, 0), 23) : 0;
@@ -21,7 +29,7 @@ export const computeNextDcaRunAt = (
     if (!isFuture(candidate, base)) {
       candidate.setDate(candidate.getDate() + 1);
     }
-    return candidate.toISOString();
+    return moveToNextWeekday(candidate).toISOString();
   }
 
   if (schedule.frequency === "WEEKLY") {
@@ -47,7 +55,7 @@ export const computeNextDcaRunAt = (
 
 export const describeDcaSchedule = (plan: Pick<DcaPlan, "frequency" | "hour" | "weekday" | "month">) => {
   if (plan.frequency === "DAILY") {
-    return `每日 ${pad(0)}:00`;
+    return `每个交易日 ${pad(0)}:00`;
   }
   if (plan.frequency === "WEEKLY") {
     const weekday = plan.weekday && plan.weekday >= 1 && plan.weekday <= 5 ? plan.weekday : 1;

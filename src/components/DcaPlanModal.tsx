@@ -255,7 +255,7 @@ export function DcaPlanModal({ open, onClose }: DcaPlanModalProps) {
               <div className="mt-3">
                 {frequency === "DAILY" ? (
                   <div className="rounded-lg border border-slate-200 bg-[#FFFDF8] px-3 py-2 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
-                    每日 00:00
+                    每个交易日 00:00
                   </div>
                 ) : null}
 

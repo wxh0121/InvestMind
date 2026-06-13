@@ -8,7 +8,7 @@
 
 - Dashboard：总资产、今日盈亏、总浮动盈亏、市场占比、资产类型占比、盈亏柱状图、加仓建议摘要。
 - 持仓管理：新增、编辑、删除、搜索、按市场和资产类型筛选。
-- 定投计划：通过 Vercel Cron 每天 00:00 自动执行加仓，支持按金额或数量定投，并按资产计价货币扣除对应现金。
+- 定投计划：通过 Vercel Cron 在交易日 00:00 自动执行加仓，支持按金额或数量定投，并按资产计价货币扣除对应现金。
 - 一键刷新：前端调用 `/api/refresh-prices`，后端统一请求 OKX / Yahoo Finance / 天天基金适配层并返回标准化数据。
 - 加仓分析：基于目标配置、单资产上限、价格相对成本偏离、今日涨跌幅、资产风险等级、技术指标与 GLM 摘要输出观察建议。
 - 本地存储：IndexedDB 保存 holdings、snapshots、settings、transactions、dcaPlans，作为离线缓存。
@@ -91,7 +91,7 @@ API Key 只在 `api/` 目录下的 Vercel Functions 中读取，不会进入前�
 - `vercel.json` 已配置 `GET /api/cron/dca`，Cron 表达式为 `0 16 * * *`。
 - Vercel Cron 使用 UTC 时区，`16:00 UTC` 对应北京时间每天 `00:00`。
 - Cron 会读取云端备份里的定投计划，刷新对应资产价格，按资产币种扣除现金；现金不足会写入定投失败状态。
-- Vercel Hobby 计划每天只能触发一次 Cron，所以每日定投固定为 `00:00`，不再由前端每分钟轮询。
+- Vercel Hobby 计划每天只能触发一次 Cron，所以交易日定投固定为北京时间 `00:00`，不再由前端每分钟轮询；周六、周日会自动跳过并顺延到下一个交易日。
 - 可选配置 `CRON_SECRET`；配置后 Cron 入口会校验 `Authorization: Bearer <CRON_SECRET>`。
 
 ## OKX API 配置

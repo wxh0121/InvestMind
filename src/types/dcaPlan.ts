@@ -36,7 +36,7 @@ export type DcaPlanDraft = Omit<
 };
 
 export const DCA_FREQUENCY_LABELS: Record<DcaFrequency, string> = {
-  DAILY: "每日",
+  DAILY: "交易日",
   WEEKLY: "每周",
   MONTHLY: "每月"
 };

@@ -71,6 +71,18 @@ const getChinaDateParts = (date: Date) => {
 const fromChinaDateTime = (year: number, monthIndex: number, dayOfMonth: number) =>
   new Date(Date.UTC(year, monthIndex, dayOfMonth, -8, 0, 0, 0));
 
+const isChinaWeekend = (date: Date) => {
+  const weekday = getChinaDateParts(date).weekday;
+  return weekday === 6 || weekday === 7;
+};
+
+const moveToNextChinaWeekday = (candidate: Date) => {
+  while (isChinaWeekend(candidate)) {
+    candidate.setUTCDate(candidate.getUTCDate() + 1);
+  }
+  return candidate;
+};
+
 const computeNextDcaRunAt = (
   schedule: Pick<DcaPlan, "frequency" | "weekday" | "month">,
   from = new Date()
@@ -83,7 +95,7 @@ const computeNextDcaRunAt = (
     if (!isFuture(candidate)) {
       candidate = fromChinaDateTime(parts.year, parts.monthIndex, parts.dayOfMonth + 1);
     }
-    return candidate.toISOString();
+    return moveToNextChinaWeekday(candidate).toISOString();
   }
 
   if (schedule.frequency === "WEEKLY") {
@@ -227,7 +239,14 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
 };
 
 const normalizeDailyPlan = (plan: DcaPlan, from: Date, updatedAt: string): DcaPlan => {
-  if (plan.frequency !== "DAILY" || plan.hour === 0) return plan;
+  if (plan.frequency !== "DAILY") return plan;
+  const nextRunAt = new Date(plan.nextRunAt);
+  const shouldNormalize =
+    plan.hour !== 0 ||
+    !Number.isFinite(nextRunAt.getTime()) ||
+    isChinaWeekend(nextRunAt);
+  if (!shouldNormalize) return plan;
+
   return {
     ...plan,
     hour: 0,
@@ -374,19 +393,50 @@ const processPortfolioPayload = async (
   let holdings = payload.holdings.map(recomputeHolding);
   const plans = Array.isArray(payload.dcaPlans) ? payload.dcaPlans : [];
   const nextPlans: DcaPlan[] = [];
+  const weekendCronRun = isChinaWeekend(now);
 
   for (const rawPlan of plans) {
-    const due = isPlanDue(rawPlan, nowMs);
-    const plan = due
+    if (rawPlan.frequency === "DAILY" && weekendCronRun) {
+      const normalizedPlan = normalizeDailyPlan(rawPlan, now, nowIso);
+
+      if (normalizedPlan !== rawPlan) {
+        changed = true;
+        summary.plansMigrated += 1;
+      }
+
+      const nextRunAt = computeNextDcaRunAt(normalizedPlan, now);
+      const weekendPlan =
+        normalizedPlan.nextRunAt === nextRunAt
+          ? normalizedPlan
+          : {
+              ...normalizedPlan,
+              hour: 0,
+              nextRunAt,
+              updatedAt: nowIso
+            };
+      if (weekendPlan !== normalizedPlan) {
+        changed = true;
+      }
+      nextPlans.push(weekendPlan);
+      continue;
+    }
+
+    const rawDue = isPlanDue(rawPlan, nowMs);
+    const plan = rawDue
       ? { ...rawPlan, hour: rawPlan.frequency === "DAILY" ? 0 : rawPlan.hour }
       : normalizeDailyPlan(rawPlan, now, nowIso);
 
     if (plan !== rawPlan) {
       changed = true;
-      if (rawPlan.frequency === "DAILY" && rawPlan.hour !== 0) {
+      if (
+        rawPlan.frequency === "DAILY" &&
+        (rawPlan.hour !== 0 || (!rawDue && plan.nextRunAt !== rawPlan.nextRunAt))
+      ) {
         summary.plansMigrated += 1;
       }
     }
+
+    const due = rawDue || isPlanDue(plan, nowMs);
 
     if (!due) {
       nextPlans.push(plan);
