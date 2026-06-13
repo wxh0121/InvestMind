@@ -9,10 +9,9 @@ import {
 import { AllocationPieChart } from "@/components/AllocationPieChart";
 import { PnLBarChart } from "@/components/PnLBarChart";
 import { RefreshButton } from "@/components/RefreshButton";
-import { StatusBadge } from "@/components/StatusBadge";
 import { SummaryCard } from "@/components/SummaryCard";
 import { usePortfolio } from "@/context/PortfolioContext";
-import { MARKET_LABELS } from "@/types/holding";
+import { MARKET_LABELS, type Holding, type Market } from "@/types/holding";
 import { convertCurrency } from "@/utils/calculations";
 import { formatCompactCurrency, formatCurrency, formatPercent } from "@/utils/format";
 
@@ -24,8 +23,39 @@ const pnlTextClass = (value: number) =>
       ? "text-rose-600 dark:text-rose-300"
       : "text-slate-500 dark:text-slate-400";
 
+const suggestionMarkets: Market[] = [
+  "A_SHARE",
+  "HK_STOCK",
+  "US_STOCK",
+  "CRYPTO",
+  "ASIA_PACIFIC",
+  "EUROPE"
+];
+
+const getMarketDecliners = (holdings: Holding[]) =>
+  suggestionMarkets
+    .map((market) => {
+      const holding = holdings
+        .filter((item) => item.market === market && item.todayPnLPercent < 0)
+        .sort((first, second) => {
+          if (first.todayPnLPercent !== second.todayPnLPercent) {
+            return first.todayPnLPercent - second.todayPnLPercent;
+          }
+          return first.todayPnL - second.todayPnL;
+        })[0];
+
+      return holding ? { market, holding } : null;
+    })
+    .filter((item): item is { market: Market; holding: Holding } => Boolean(item))
+    .sort((first, second) => {
+      if (first.holding.todayPnLPercent !== second.holding.todayPnLPercent) {
+        return first.holding.todayPnLPercent - second.holding.todayPnLPercent;
+      }
+      return first.holding.todayPnL - second.holding.todayPnL;
+    });
+
 export function Dashboard() {
-  const { holdings, settings, summary, analyses, fxRates, fxUpdatedAt, loading } = usePortfolio();
+  const { holdings, settings, summary, fxRates, fxUpdatedAt, loading } = usePortfolio();
   const fxUpdatedText = fxUpdatedAt
     ? new Date(fxUpdatedAt).toLocaleString("zh-CN", {
         month: "2-digit",
@@ -39,10 +69,7 @@ export function Dashboard() {
       (acc[holding.market] ?? 0) + convertCurrency(holding.todayPnL, holding.currency, fxRates);
     return acc;
   }, {});
-  const topSuggestions = [...analyses]
-    .filter((item) => item.addSuggestionPercent > 0)
-    .sort((a, b) => b.addSuggestionPercent - a.addSuggestionPercent)
-    .slice(0, 4);
+  const marketDecliners = getMarketDecliners(holdings);
   const chartData = holdings
     .slice()
     .sort(
@@ -122,26 +149,31 @@ export function Dashboard() {
               查看全部
             </Link>
           </div>
-          <div className="space-y-3">
-            {topSuggestions.length ? (
-              topSuggestions.map((item) => (
+          <div className="space-y-2">
+            {marketDecliners.length ? (
+              marketDecliners.map(({ market, holding }) => (
                 <div
-                  key={item.holdingId}
-                  className="surface-hover rounded-lg border border-slate-100 bg-[#FFFDF8] p-3 transition duration-200 dark:border-slate-800 dark:bg-slate-900"
+                  key={market}
+                  className="surface-hover flex min-h-11 items-center gap-2 rounded-lg border border-slate-100 bg-[#FFFDF8] px-3 py-2 transition duration-200 dark:border-slate-800 dark:bg-slate-900"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-slate-900 dark:text-slate-50">{item.name}</p>
-                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item.symbol}</p>
-                    </div>
-                    <StatusBadge tone="accent">建议 {item.addSuggestionPercent}%</StatusBadge>
-                  </div>
-                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{item.reasons[0]}</p>
+                  <span className="shrink-0 rounded-md bg-coral-50 px-2 py-1 text-[11px] font-medium text-coral-700 dark:bg-coral-950 dark:text-coral-200">
+                    {MARKET_LABELS[market]}
+                  </span>
+                  <p className="min-w-0 flex-1 truncate text-sm text-slate-900 dark:text-slate-50">
+                    <span className="font-medium">{holding.name}</span>
+                    <span className="ml-1 text-xs text-slate-500 dark:text-slate-400">{holding.symbol}</span>
+                  </p>
+                  <span className={`shrink-0 text-sm font-semibold ${pnlTextClass(holding.todayPnLPercent)}`}>
+                    {formatPercent(holding.todayPnLPercent)}
+                  </span>
+                  <span className={`hidden shrink-0 text-xs sm:inline ${pnlTextClass(holding.todayPnL)}`}>
+                    {formatCurrency(holding.todayPnL, holding.currency)}
+                  </span>
                 </div>
               ))
             ) : (
               <div className="flex min-h-40 items-center justify-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                暂无加仓建议
+                暂无持仓跌幅数据
               </div>
             )}
           </div>
