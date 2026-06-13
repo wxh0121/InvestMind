@@ -54,7 +54,7 @@ const pnlClass = (value: number) =>
 
 function MarketItemLine({ item }: { item: GlobalMarketItem }) {
   return (
-    <div className="flex items-center justify-between gap-2 text-xs">
+    <div className="flex items-center justify-between gap-1.5 text-[11px] sm:text-xs">
       <span className="truncate text-slate-600 dark:text-slate-300">{item.label}</span>
       <span className={cn("shrink-0 font-medium", pnlClass(item.change))}>
         {signedNumber(item.change)} · {signedPercent(item.changePercent)}
@@ -65,14 +65,14 @@ function MarketItemLine({ item }: { item: GlobalMarketItem }) {
 
 function GlobalMarketGroupCard({ group }: { group: GlobalMarketGroup }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-[#FFFDF8] p-3 dark:border-slate-800 dark:bg-slate-950">
-      <div className="flex items-center justify-between gap-3">
+    <div className="rounded-lg border border-slate-200 bg-[#FFFDF8] p-2.5 dark:border-slate-800 dark:bg-slate-950 sm:p-3">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">{group.label}</p>
-        <span className={cn("text-sm font-semibold", pnlClass(group.averageChangePercent))}>
+        <span className={cn("text-xs font-semibold sm:text-sm", pnlClass(group.averageChangePercent))}>
           {group.items.length ? signedPercent(group.averageChangePercent) : "-"}
         </span>
       </div>
-      <div className="mt-3 space-y-2">
+      <div className="mt-2 space-y-1.5 sm:mt-3 sm:space-y-2">
         {group.items.length ? (
           group.items.map((item) => <MarketItemLine key={item.key} item={item} />)
         ) : (
@@ -133,7 +133,7 @@ function GlobalMarketSection({
       {error ? <p className="mt-3 text-sm text-rose-600 dark:text-rose-300">{error}</p> : null}
 
       {snapshot ? (
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-3 xl:grid-cols-6">
           {snapshot.groups.map((group) => (
             <GlobalMarketGroupCard key={group.key} group={group} />
           ))}
@@ -323,13 +323,6 @@ export function Analysis() {
         </button>
       </div>
 
-      <GlobalMarketSection
-        snapshot={globalMarkets}
-        loading={globalMarketLoading}
-        error={globalMarketError}
-        onRefresh={loadGlobalMarkets}
-      />
-
       <section className="surface p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -421,6 +414,13 @@ export function Analysis() {
         ) : null}
         {aiError ? <p className="mt-3 text-sm text-rose-600 dark:text-rose-300">{aiError}</p> : null}
       </section>
+
+      <GlobalMarketSection
+        snapshot={globalMarkets}
+        loading={globalMarketLoading}
+        error={globalMarketError}
+        onRefresh={loadGlobalMarkets}
+      />
 
       {technicalError ? <p className="text-sm text-rose-600 dark:text-rose-300">{technicalError}</p> : null}
 
