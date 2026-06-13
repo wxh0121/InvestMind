@@ -68,7 +68,7 @@ FX_BASE_URL=https://open.er-api.com
 
 GLM_API_KEY=
 GLM_BASE_URL=https://api.z.ai/api/paas/v4
-GLM_MODEL=glm-4.7-flash
+GLM_MODEL=glm-4.5-air
 
 POSTGRES_URL=
 DATABASE_URL=
@@ -126,8 +126,8 @@ API Key 只在 `api/` 目录下的 Vercel Functions 中读取，不会进入前�
 
 - `POST /api/analysis/ai-summary` 使用 Z.AI 兼容 OpenAI 的 Chat Completions 接口生成持仓摘要。
 - `GLM_API_KEY` 必须只放在 `.env.local` 或 Vercel 环境变量中，不要写入前端代码。
-- `GLM_MODEL` 默认 `glm-4.7-flash`；如果平台模型名有调整，只需要改环境变量。
-- 技术指标由本地服务先计算，再把摘要数据发送给模型；页面仍会保留本地规则分析结果。
+- `GLM_MODEL` 默认 `glm-4.5-air`；如果平台模型名有调整，只需要改环境变量。
+- 技术指标由本地服务先计算；GLM 可选择大盘分析或单个技术指标资产分析，避免一次发送过多持仓。
 
 ## 数据备份
 

@@ -1,11 +1,19 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { HoldingAnalysis } from "../../src/types/analysis.js";
 import type { AiAnalysisSummary } from "../../src/types/aiAnalysis.js";
+import type { GlobalMarketSnapshot } from "../../src/types/globalMarket.js";
 import type { Holding } from "../../src/types/holding.js";
 import type { TechnicalHoldingAnalysis } from "../../src/types/technical.js";
 import { allowMethods, sendJson } from "../../lib/server/http.js";
 
+type AiSummaryMode = "MARKET" | "HOLDING";
+
 interface AiSummaryRequestBody {
+  mode?: AiSummaryMode;
+  globalMarkets?: GlobalMarketSnapshot;
+  holding?: Holding;
+  ruleAnalysis?: HoldingAnalysis;
+  technicalAnalysis?: TechnicalHoldingAnalysis;
   holdings?: Holding[];
   ruleAnalyses?: HoldingAnalysis[];
   technicalAnalyses?: TechnicalHoldingAnalysis[];
@@ -26,59 +34,109 @@ interface ChatCompletionResponse {
 const getGlmConfig = () => ({
   apiKey: process.env.GLM_API_KEY,
   baseUrl: (process.env.GLM_BASE_URL || "https://api.z.ai/api/paas/v4").replace(/\/$/, ""),
-  model: process.env.GLM_MODEL || "glm-4.7-flash"
+  model: process.env.GLM_MODEL || "glm-4.5-air"
 });
 
 const compactNumber = (value?: number) =>
   typeof value === "number" && Number.isFinite(value) ? Number(value.toFixed(4)) : undefined;
 
-const buildPrompt = ({
-  holdings,
-  ruleAnalyses,
-  technicalAnalyses
-}: Required<AiSummaryRequestBody>) => {
-  const ruleById = new Map(ruleAnalyses.map((item) => [item.holdingId, item]));
-  const technicalById = new Map(technicalAnalyses.map((item) => [item.holdingId, item]));
-  const payload = holdings.map((holding) => {
-    const rule = ruleById.get(holding.id);
-    const technical = technicalById.get(holding.id);
+const compactGlobalMarkets = (snapshot: GlobalMarketSnapshot) => ({
+  createdAt: snapshot.createdAt,
+  groups: snapshot.groups.map((group) => ({
+    label: group.label,
+    averageChangePercent: compactNumber(group.averageChangePercent),
+    items: group.items.map((item) => ({
+      label: item.label,
+      symbol: item.symbol,
+      currentPrice: compactNumber(item.currentPrice),
+      change: compactNumber(item.change),
+      changePercent: compactNumber(item.changePercent)
+    })),
+    error: group.error
+  }))
+});
 
-    return {
-      id: holding.id,
-      name: holding.name,
-      symbol: holding.symbol,
-      market: holding.market,
-      assetType: holding.assetType,
-      currency: holding.currency,
-      quantity: compactNumber(holding.quantity),
-      currentPrice: compactNumber(holding.currentPrice),
-      averageCost: compactNumber(holding.averageCost),
-      marketValue: compactNumber(holding.marketValue),
-      todayPnLPercent: compactNumber(holding.todayPnLPercent),
-      totalPnLPercent: compactNumber(holding.totalPnLPercent),
-      ruleAnalysis: rule
-        ? {
-            action: rule.action,
-            addSuggestionPercent: rule.addSuggestionPercent,
-            riskLevel: rule.riskLevel,
-            reasons: rule.reasons,
-            indicators: rule.indicators
-          }
-        : undefined,
-      technicalAnalysis: technical
-        ? {
-            ok: technical.ok,
-            action: technical.action,
-            bias: technical.bias,
-            score: technical.score,
-            reasons: technical.reasons,
-            metrics: technical.metrics
-          }
-        : undefined
-    };
-  });
+const compactHoldingPayload = (
+  holding: Holding,
+  ruleAnalysis: HoldingAnalysis | undefined,
+  technicalAnalysis: TechnicalHoldingAnalysis
+) => ({
+  id: holding.id,
+  name: holding.name,
+  symbol: holding.symbol,
+  market: holding.market,
+  assetType: holding.assetType,
+  currency: holding.currency,
+  quantity: compactNumber(holding.quantity),
+  currentPrice: compactNumber(holding.currentPrice),
+  averageCost: compactNumber(holding.averageCost),
+  marketValue: compactNumber(holding.marketValue),
+  todayPnLPercent: compactNumber(holding.todayPnLPercent),
+  totalPnLPercent: compactNumber(holding.totalPnLPercent),
+  ruleAnalysis: ruleAnalysis
+    ? {
+        action: ruleAnalysis.action,
+        addSuggestionPercent: ruleAnalysis.addSuggestionPercent,
+        riskLevel: ruleAnalysis.riskLevel,
+        reasons: ruleAnalysis.reasons.slice(0, 4),
+        indicators: ruleAnalysis.indicators.slice(0, 6)
+      }
+    : undefined,
+  technicalAnalysis: {
+    ok: technicalAnalysis.ok,
+    action: technicalAnalysis.action,
+    bias: technicalAnalysis.bias,
+    score: technicalAnalysis.score,
+    reasons: technicalAnalysis.reasons.slice(0, 6),
+    metrics: technicalAnalysis.metrics,
+    candleCount: technicalAnalysis.candleCount
+  }
+});
 
-  return `你是一个谨慎的个人资产记录助手，不提供确定性投资建议，只基于用户给出的持仓数据、本地规则分析和技术指标做风险提示与加减仓观察摘要。
+const outputContract = `输出必须是 JSON，不要 markdown，不要代码块。结构如下：
+{
+  "overview": "摘要正文",
+  "items": [
+    {
+      "holdingId": "string",
+      "symbol": "string",
+      "name": "string",
+      "action": "BUY_MORE|HOLD|REDUCE|WATCH",
+      "confidence": "LOW|MEDIUM|HIGH",
+      "summary": "单项摘要",
+      "keySignals": ["最多3条"],
+      "risks": ["最多3条"]
+    }
+  ]
+}`;
+
+const buildMarketPrompt = (globalMarkets: GlobalMarketSnapshot) => `你是一个谨慎的个人资产记录助手，不提供确定性投资建议。
+
+请只基于今天的全球主要市场指数涨跌，做“大盘环境”摘要和加仓/减仓观察。不要分析用户具体持仓，不要编造未提供的数据。
+
+要求：
+1. overview 控制在 100-180 字。
+2. 用语要简洁，给出风险偏好、市场强弱、加仓/减仓节奏观察。
+3. items 返回空数组。
+4. 如果某些地区行情缺失，只忽略缺失项。
+
+${outputContract}
+
+全球行情数据如下：
+${JSON.stringify(compactGlobalMarkets(globalMarkets))}`;
+
+const buildHoldingPrompt = ({
+  holding,
+  ruleAnalysis,
+  technicalAnalysis
+}: {
+  holding: Holding;
+  ruleAnalysis?: HoldingAnalysis;
+  technicalAnalysis: TechnicalHoldingAnalysis;
+}) => {
+  const payload = compactHoldingPayload(holding, ruleAnalysis, technicalAnalysis);
+
+  return `你是一个谨慎的个人资产记录助手，不提供确定性投资建议，只基于用户选择的单个资产、本地规则分析和技术指标做风险提示与加减仓观察摘要。
 
 请参考以下技术分析框架：
 1. 趋势过滤：MA/SMA/EMA，价格站上 20 日均线、短期均线上穿长期均线偏多；跌破均线、死叉偏空。
@@ -87,24 +145,14 @@ const buildPrompt = ({
 4. 成交量确认：OBV 上升确认趋势，下降提示趋势质量变弱。
 5. 多指标共振优先，单一指标不得给出激进结论。
 
-输出必须是 JSON，不要 markdown，不要代码块。结构如下：
-{
-  "overview": "组合整体摘要，80-160字",
-  "items": [
-    {
-      "holdingId": "string",
-      "symbol": "string",
-      "name": "string",
-      "action": "BUY_MORE|HOLD|REDUCE|WATCH",
-      "confidence": "LOW|MEDIUM|HIGH",
-      "summary": "单项摘要，40-90字",
-      "keySignals": ["最多3条"],
-      "risks": ["最多3条"]
-    }
-  ]
-}
+要求：
+1. overview 控制在 80-140 字，只分析该资产。
+2. items 只返回 1 项，summary 控制在 50-90 字。
+3. 明确区分观察信号和风险，不要承诺收益。
 
-持仓数据如下：
+${outputContract}
+
+单项资产数据如下：
 ${JSON.stringify(payload)}`;
 };
 
@@ -130,11 +178,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const body = req.body as AiSummaryRequestBody | undefined;
-  const holdings = Array.isArray(body?.holdings) ? body.holdings : [];
-  const ruleAnalyses = Array.isArray(body?.ruleAnalyses) ? body.ruleAnalyses : [];
-  const technicalAnalyses = Array.isArray(body?.technicalAnalyses) ? body.technicalAnalyses : [];
-  if (!holdings.length) {
-    sendJson(res, 400, { ok: false, error: "holdings is required" });
+  const mode: AiSummaryMode = body?.mode === "HOLDING" ? "HOLDING" : "MARKET";
+  let prompt = "";
+
+  if (mode === "MARKET") {
+    if (!body?.globalMarkets?.groups?.length) {
+      sendJson(res, 400, { ok: false, error: "globalMarkets is required" });
+      return;
+    }
+    prompt = buildMarketPrompt(body.globalMarkets);
+  } else {
+    if (!body?.holding || !body.technicalAnalysis?.ok) {
+      sendJson(res, 400, { ok: false, error: "holding and available technicalAnalysis are required" });
+      return;
+    }
+    prompt = buildHoldingPrompt({
+      holding: body.holding,
+      ruleAnalysis: body.ruleAnalysis,
+      technicalAnalysis: body.technicalAnalysis
+    });
+  }
+
+  if (!prompt) {
+    sendJson(res, 400, { ok: false, error: "analysis prompt is empty" });
     return;
   }
 
@@ -155,12 +221,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         },
         {
           role: "user",
-          content: buildPrompt({ holdings, ruleAnalyses, technicalAnalyses })
+          content: prompt
         }
       ],
       thinking: { type: "disabled" },
       temperature: 0.2,
-      max_tokens: 2400
+      max_tokens: mode === "MARKET" ? 900 : 1100
     })
   });
 
