@@ -9,7 +9,7 @@ import {
   type SettingRecord
 } from "@/types/settings";
 import { calculatePortfolioSummary, recomputeHolding } from "@/utils/calculations";
-import { computeNextDcaRunAt } from "@/utils/dcaSchedule";
+import { DCA_EXECUTION_HOUR, DCA_EXECUTION_MINUTE, computeNextDcaRunAt } from "@/utils/dcaSchedule";
 
 const SETTINGS_KEY = "portfolio";
 
@@ -77,6 +77,26 @@ const normalizeHolding = <T extends HoldingDraft | Holding>(holding: T) =>
         : normalizeDataSource((holding as T & { dataSource?: LegacyDataSource }).dataSource)
   });
 
+const isDcaPlanAtExecutionTime = (plan: DcaPlan) => {
+  const nextRunAt = new Date(plan.nextRunAt);
+  return (
+    Number.isFinite(nextRunAt.getTime()) &&
+    nextRunAt.getHours() === DCA_EXECUTION_HOUR &&
+    nextRunAt.getMinutes() === DCA_EXECUTION_MINUTE
+  );
+};
+
+const normalizeDcaPlanSchedule = (plan: DcaPlan) => {
+  if (plan.hour === DCA_EXECUTION_HOUR && isDcaPlanAtExecutionTime(plan)) return plan;
+
+  return {
+    ...plan,
+    hour: DCA_EXECUTION_HOUR,
+    nextRunAt: computeNextDcaRunAt(plan),
+    updatedAt: new Date().toISOString()
+  };
+};
+
 const normalizeSettings = (settings?: LegacyPortfolioSettings): PortfolioSettings => ({
   ...DEFAULT_SETTINGS,
   ...settings,
@@ -121,14 +141,20 @@ export const deleteHolding = async (id: string) => {
   await db.holdings.delete(id);
 };
 
-export const getDcaPlans = async () =>
-  db.dcaPlans.orderBy("nextRunAt").toArray();
+export const getDcaPlans = async () => {
+  const plans = await db.dcaPlans.orderBy("nextRunAt").toArray();
+  const normalized = plans.map(normalizeDcaPlanSchedule);
+  if (normalized.some((plan, index) => plan !== plans[index])) {
+    await db.dcaPlans.bulkPut(normalized);
+  }
+  return normalized.slice().sort((first, second) => first.nextRunAt.localeCompare(second.nextRunAt));
+};
 
 export const saveDcaPlan = async (draft: DcaPlanDraft | DcaPlan) => {
   const now = new Date().toISOString();
   const normalizedDraft = {
     ...draft,
-    hour: draft.frequency === "DAILY" ? 0 : draft.hour
+    hour: DCA_EXECUTION_HOUR
   };
   const plan: DcaPlan = {
     ...normalizedDraft,

@@ -55,6 +55,8 @@ const roundPercent = (value: number) =>
   Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
 const roundPositionNumber = (value: number) => Number(value.toFixed(8));
 const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
+const DCA_EXECUTION_HOUR = 15;
+const DCA_EXECUTION_MINUTE = 30;
 
 const isCashHolding = (holding: Holding) => holding.market === "CASH" || holding.assetType === "CASH";
 
@@ -64,12 +66,19 @@ const getChinaDateParts = (date: Date) => {
     year: shifted.getUTCFullYear(),
     monthIndex: shifted.getUTCMonth(),
     dayOfMonth: shifted.getUTCDate(),
-    weekday: shifted.getUTCDay() === 0 ? 7 : shifted.getUTCDay()
+    weekday: shifted.getUTCDay() === 0 ? 7 : shifted.getUTCDay(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes()
   };
 };
 
-const fromChinaDateTime = (year: number, monthIndex: number, dayOfMonth: number) =>
-  new Date(Date.UTC(year, monthIndex, dayOfMonth, -8, 0, 0, 0));
+const fromChinaDateTime = (
+  year: number,
+  monthIndex: number,
+  dayOfMonth: number,
+  hour = DCA_EXECUTION_HOUR,
+  minute = DCA_EXECUTION_MINUTE
+) => new Date(Date.UTC(year, monthIndex, dayOfMonth, hour - 8, minute, 0, 0));
 
 const isChinaWeekend = (date: Date) => {
   const weekday = getChinaDateParts(date).weekday;
@@ -81,6 +90,11 @@ const moveToNextChinaWeekday = (candidate: Date) => {
     candidate.setUTCDate(candidate.getUTCDate() + 1);
   }
   return candidate;
+};
+
+const isChinaExecutionTime = (date: Date) => {
+  const parts = getChinaDateParts(date);
+  return parts.hour === DCA_EXECUTION_HOUR && parts.minute === DCA_EXECUTION_MINUTE;
 };
 
 const computeNextDcaRunAt = (
@@ -238,18 +252,18 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
   return payload.version === 1 && Array.isArray(payload.holdings) && Boolean(payload.settings);
 };
 
-const normalizeDailyPlan = (plan: DcaPlan, from: Date, updatedAt: string): DcaPlan => {
-  if (plan.frequency !== "DAILY") return plan;
+const normalizeDcaPlan = (plan: DcaPlan, from: Date, updatedAt: string): DcaPlan => {
   const nextRunAt = new Date(plan.nextRunAt);
   const shouldNormalize =
-    plan.hour !== 0 ||
+    plan.hour !== DCA_EXECUTION_HOUR ||
     !Number.isFinite(nextRunAt.getTime()) ||
-    isChinaWeekend(nextRunAt);
+    !isChinaExecutionTime(nextRunAt) ||
+    (plan.frequency === "DAILY" && isChinaWeekend(nextRunAt));
   if (!shouldNormalize) return plan;
 
   return {
     ...plan,
-    hour: 0,
+    hour: DCA_EXECUTION_HOUR,
     nextRunAt: computeNextDcaRunAt(plan, from),
     updatedAt
   };
@@ -290,7 +304,7 @@ const withPlanResult = (
   message: string
 ): DcaPlan => ({
   ...plan,
-  hour: plan.frequency === "DAILY" ? 0 : plan.hour,
+  hour: DCA_EXECUTION_HOUR,
   nextRunAt: computeNextDcaRunAt(plan, now),
   lastRunAt: now.toISOString(),
   lastStatus: status,
@@ -397,7 +411,7 @@ const processPortfolioPayload = async (
 
   for (const rawPlan of plans) {
     if (rawPlan.frequency === "DAILY" && weekendCronRun) {
-      const normalizedPlan = normalizeDailyPlan(rawPlan, now, nowIso);
+      const normalizedPlan = normalizeDcaPlan(rawPlan, now, nowIso);
 
       if (normalizedPlan !== rawPlan) {
         changed = true;
@@ -410,7 +424,7 @@ const processPortfolioPayload = async (
           ? normalizedPlan
           : {
               ...normalizedPlan,
-              hour: 0,
+              hour: DCA_EXECUTION_HOUR,
               nextRunAt,
               updatedAt: nowIso
             };
@@ -423,14 +437,14 @@ const processPortfolioPayload = async (
 
     const rawDue = isPlanDue(rawPlan, nowMs);
     const plan = rawDue
-      ? { ...rawPlan, hour: rawPlan.frequency === "DAILY" ? 0 : rawPlan.hour }
-      : normalizeDailyPlan(rawPlan, now, nowIso);
+      ? { ...rawPlan, hour: DCA_EXECUTION_HOUR }
+      : normalizeDcaPlan(rawPlan, now, nowIso);
 
     if (plan !== rawPlan) {
       changed = true;
       if (
-        rawPlan.frequency === "DAILY" &&
-        (rawPlan.hour !== 0 || (!rawDue && plan.nextRunAt !== rawPlan.nextRunAt))
+        rawPlan.hour !== DCA_EXECUTION_HOUR ||
+        (!rawDue && plan.nextRunAt !== rawPlan.nextRunAt)
       ) {
         summary.plansMigrated += 1;
       }

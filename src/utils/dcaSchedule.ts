@@ -1,6 +1,9 @@
 import type { DcaFrequency, DcaPlan } from "@/types/dcaPlan";
 
 const pad = (value: number) => String(value).padStart(2, "0");
+export const DCA_EXECUTION_HOUR = 15;
+export const DCA_EXECUTION_MINUTE = 30;
+export const DCA_EXECUTION_TIME_LABEL = `${pad(DCA_EXECUTION_HOUR)}:${pad(DCA_EXECUTION_MINUTE)}`;
 
 const isFuture = (candidate: Date, from: Date) => candidate.getTime() > from.getTime();
 const isWeekend = (date: Date) => date.getDay() === 0 || date.getDay() === 6;
@@ -20,12 +23,10 @@ export const computeNextDcaRunAt = (
   from = new Date()
 ) => {
   const base = new Date(from);
-  const hour = schedule.frequency === "DAILY" ? 0 : normalizeDcaHour(schedule.hour);
 
   if (schedule.frequency === "DAILY") {
     const candidate = new Date(base);
-    candidate.setMinutes(0, 0, 0);
-    candidate.setHours(hour);
+    candidate.setHours(DCA_EXECUTION_HOUR, DCA_EXECUTION_MINUTE, 0, 0);
     if (!isFuture(candidate, base)) {
       candidate.setDate(candidate.getDate() + 1);
     }
@@ -35,7 +36,7 @@ export const computeNextDcaRunAt = (
   if (schedule.frequency === "WEEKLY") {
     const weekday = schedule.weekday && schedule.weekday >= 1 && schedule.weekday <= 5 ? schedule.weekday : 1;
     const candidate = new Date(base);
-    candidate.setHours(0, 0, 0, 0);
+    candidate.setHours(DCA_EXECUTION_HOUR, DCA_EXECUTION_MINUTE, 0, 0);
     const currentWeekday = candidate.getDay() === 0 ? 7 : candidate.getDay();
     const dayOffset = (weekday - currentWeekday + 7) % 7;
     candidate.setDate(candidate.getDate() + dayOffset);
@@ -46,7 +47,7 @@ export const computeNextDcaRunAt = (
   }
 
   const month = schedule.month && schedule.month >= 1 && schedule.month <= 12 ? schedule.month : 1;
-  const candidate = new Date(base.getFullYear(), month - 1, 1, 0, 0, 0, 0);
+  const candidate = new Date(base.getFullYear(), month - 1, 1, DCA_EXECUTION_HOUR, DCA_EXECUTION_MINUTE, 0, 0);
   if (!isFuture(candidate, base)) {
     candidate.setFullYear(candidate.getFullYear() + 1);
   }
@@ -55,14 +56,14 @@ export const computeNextDcaRunAt = (
 
 export const describeDcaSchedule = (plan: Pick<DcaPlan, "frequency" | "hour" | "weekday" | "month">) => {
   if (plan.frequency === "DAILY") {
-    return `每个交易日 ${pad(0)}:00`;
+    return `每个交易日 ${DCA_EXECUTION_TIME_LABEL}`;
   }
   if (plan.frequency === "WEEKLY") {
     const weekday = plan.weekday && plan.weekday >= 1 && plan.weekday <= 5 ? plan.weekday : 1;
-    return `每周 ${["", "周一", "周二", "周三", "周四", "周五"][weekday]} 00:00`;
+    return `每周 ${["", "周一", "周二", "周三", "周四", "周五"][weekday]} ${DCA_EXECUTION_TIME_LABEL}`;
   }
   const month = plan.month && plan.month >= 1 && plan.month <= 12 ? plan.month : 1;
-  return `每年 ${month} 月 1 日 00:00`;
+  return `每年 ${month} 月 1 日 ${DCA_EXECUTION_TIME_LABEL}`;
 };
 
 export const formatDcaDateTime = (iso?: string) => {

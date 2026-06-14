@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { usePortfolio } from "@/context/PortfolioContext";
 import type { Holding } from "@/types/holding";
@@ -6,6 +6,11 @@ import { cn, formatCurrency } from "@/utils/format";
 
 type PositionAdjustmentType = "BUY" | "SELL";
 type PositionInputMode = "QUANTITY" | "AMOUNT";
+
+const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
+const CLOSE_PRICE_HOUR = 15;
+const CLOSE_PRICE_MINUTE = 30;
+const CLOSE_PRICE_LABEL = "15:30";
 
 interface PositionAdjustModalProps {
   open: boolean;
@@ -19,6 +24,26 @@ const isTradable = (holding: Holding, type: PositionAdjustmentType) => {
   return true;
 };
 
+const isFundHolding = (holding?: Holding) =>
+  holding?.assetType === "INDEX_FUND" || holding?.assetType === "SECTOR_FUND";
+
+const getChinaCloseTime = (from = new Date()) => {
+  const shifted = new Date(from.getTime() + CHINA_TIME_OFFSET_MS);
+  return new Date(
+    Date.UTC(
+      shifted.getUTCFullYear(),
+      shifted.getUTCMonth(),
+      shifted.getUTCDate(),
+      CLOSE_PRICE_HOUR - 8,
+      CLOSE_PRICE_MINUTE,
+      0,
+      0
+    )
+  );
+};
+
+const isBeforeChinaClose = (from = new Date()) => from.getTime() < getChinaCloseTime(from).getTime();
+
 export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModalProps) {
   const { holdings, adjustPosition } = usePortfolio();
   const [holdingId, setHoldingId] = useState("");
@@ -27,15 +52,20 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
   const [amount, setAmount] = useState("");
   const [manualPriceEnabled, setManualPriceEnabled] = useState(false);
   const [manualPrice, setManualPrice] = useState("");
+  const [closePriceEnabled, setClosePriceEnabled] = useState(false);
+  const [waitingForClose, setWaitingForClose] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionLabel = type === "BUY" ? "加仓" : "减仓";
+  const closePriceLabel = `收盘价格${actionLabel}`;
   const eligibleHoldings = useMemo(
     () => holdings.filter((holding) => isTradable(holding, type)),
     [holdings, type]
   );
   const selectedHolding = eligibleHoldings.find((holding) => holding.id === holdingId);
+  const formLocked = saving || waitingForClose;
   const estimatedPrice = manualPriceEnabled ? Number(manualPrice) : (selectedHolding?.currentPrice ?? 0);
   const estimatedAmount = Number(amount);
   const estimatedQuantity =
@@ -50,29 +80,57 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
     !Number.isFinite(numericInputValue) ||
     numericInputValue <= 0 ||
     (manualPriceEnabled && (!Number.isFinite(numericManualPrice) || numericManualPrice <= 0)) ||
-    saving;
+    formLocked;
 
   useEffect(() => {
-    if (!open) return;
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    if (!open) {
+      setWaitingForClose(false);
+      setSaving(false);
+      return;
+    }
     setHoldingId(eligibleHoldings[0]?.id ?? "");
     setInputMode("QUANTITY");
     setQuantity("");
     setAmount("");
     setManualPriceEnabled(false);
     setManualPrice("");
+    setClosePriceEnabled(false);
+    setWaitingForClose(false);
+    setSaving(false);
     setMessage("");
     setError("");
   }, [eligibleHoldings, open, type]);
+
+  useEffect(() => {
+    if (!open) return;
+    setClosePriceEnabled(isFundHolding(selectedHolding));
+    setManualPriceEnabled(false);
+    setManualPrice("");
+  }, [holdingId, open, selectedHolding]);
+
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+      }
+    },
+    []
+  );
 
   if (!open) return null;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSaving(true);
     setMessage("");
     setError("");
 
-    try {
+    const executeAdjustment = async () => {
+      setWaitingForClose(false);
+      setSaving(true);
       const result = await adjustPosition({
         holdingId,
         type,
@@ -86,10 +144,31 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
       setMessage(
         `${actionLabel}成功，成交价 ${formatCurrency(result.price, result.holding.currency)}，成交数量 ${result.quantity.toLocaleString("zh-CN")}，成交金额 ${formatCurrency(result.amount, result.holding.currency)}，当前数量 ${result.holding.quantity}`
       );
-    } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : `${actionLabel}失败`);
-    } finally {
       setSaving(false);
+    };
+
+    try {
+      if (closePriceEnabled && !manualPriceEnabled && isBeforeChinaClose()) {
+        const closeAt = getChinaCloseTime();
+        const delay = closeAt.getTime() - Date.now();
+        setWaitingForClose(true);
+        setMessage(`已等待至今日 ${CLOSE_PRICE_LABEL} 执行${actionLabel}，请保持当前页面开启。`);
+        closeTimerRef.current = setTimeout(() => {
+          closeTimerRef.current = null;
+          void executeAdjustment().catch((delayedError) => {
+            setSaving(false);
+            setWaitingForClose(false);
+            setError(delayedError instanceof Error ? delayedError.message : `${actionLabel}失败`);
+          });
+        }, delay);
+        return;
+      }
+
+      await executeAdjustment();
+    } catch (submitError) {
+      setSaving(false);
+      setWaitingForClose(false);
+      setError(submitError instanceof Error ? submitError.message : `${actionLabel}失败`);
     }
   };
 
@@ -110,7 +189,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
               className="input"
               value={holdingId}
               onChange={(event) => setHoldingId(event.target.value)}
-              disabled={!eligibleHoldings.length || saving}
+              disabled={!eligibleHoldings.length || formLocked}
             >
               {eligibleHoldings.map((holding) => (
                 <option key={holding.id} value={holding.id}>
@@ -130,7 +209,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
               )}
               type="button"
               onClick={() => setInputMode("QUANTITY")}
-              disabled={saving}
+              disabled={formLocked}
             >
               按数量
             </button>
@@ -143,7 +222,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
               )}
               type="button"
               onClick={() => setInputMode("AMOUNT")}
-              disabled={saving}
+              disabled={formLocked}
             >
               按金额
             </button>
@@ -161,7 +240,24 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
               onChange={(event) =>
                 inputMode === "QUANTITY" ? setQuantity(event.target.value) : setAmount(event.target.value)
               }
-              disabled={!eligibleHoldings.length || saving}
+              disabled={!eligibleHoldings.length || formLocked}
+            />
+          </label>
+
+          <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{closePriceLabel}</span>
+            <input
+              className="h-5 w-5 accent-coral-600"
+              type="checkbox"
+              checked={closePriceEnabled}
+              onChange={(event) => {
+                setClosePriceEnabled(event.target.checked);
+                if (event.target.checked) {
+                  setManualPriceEnabled(false);
+                  setManualPrice("");
+                }
+              }}
+              disabled={!eligibleHoldings.length || formLocked || manualPriceEnabled}
             />
           </label>
 
@@ -171,8 +267,13 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
               className="h-5 w-5 accent-coral-600"
               type="checkbox"
               checked={manualPriceEnabled}
-              onChange={(event) => setManualPriceEnabled(event.target.checked)}
-              disabled={!eligibleHoldings.length || saving}
+              onChange={(event) => {
+                setManualPriceEnabled(event.target.checked);
+                if (event.target.checked) {
+                  setClosePriceEnabled(false);
+                }
+              }}
+              disabled={!eligibleHoldings.length || formLocked || closePriceEnabled}
             />
           </label>
 
@@ -186,7 +287,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
                 type="number"
                 value={manualPrice}
                 onChange={(event) => setManualPrice(event.target.value)}
-                disabled={!eligibleHoldings.length || saving}
+                disabled={!eligibleHoldings.length || formLocked}
               />
             </label>
           ) : null}
@@ -231,7 +332,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
             type="submit"
             disabled={submitDisabled}
           >
-            {saving ? "处理中" : `确认${actionLabel}`}
+            {waitingForClose ? "等待收盘" : saving ? "处理中" : `确认${actionLabel}`}
           </button>
         </div>
       </form>

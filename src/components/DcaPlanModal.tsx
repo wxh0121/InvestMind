@@ -11,7 +11,13 @@ import {
 } from "@/types/dcaPlan";
 import type { Holding } from "@/types/holding";
 import { cn } from "@/utils/format";
-import { computeNextDcaRunAt, describeDcaSchedule, formatDcaDateTime } from "@/utils/dcaSchedule";
+import {
+  DCA_EXECUTION_HOUR,
+  DCA_EXECUTION_TIME_LABEL,
+  computeNextDcaRunAt,
+  describeDcaSchedule,
+  formatDcaDateTime
+} from "@/utils/dcaSchedule";
 
 interface DcaPlanModalProps {
   open: boolean;
@@ -103,7 +109,7 @@ export function DcaPlanModal({ open, onClose }: DcaPlanModalProps) {
 
         const schedule = {
           frequency,
-          hour: 0,
+          hour: DCA_EXECUTION_HOUR,
           weekday: frequency === "WEEKLY" ? weekday : undefined,
           month: frequency === "MONTHLY" ? month : undefined
         };
@@ -255,7 +261,7 @@ export function DcaPlanModal({ open, onClose }: DcaPlanModalProps) {
               <div className="mt-3">
                 {frequency === "DAILY" ? (
                   <div className="rounded-lg border border-slate-200 bg-[#FFFDF8] px-3 py-2 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
-                    每个交易日 00:00
+                    每个交易日 {DCA_EXECUTION_TIME_LABEL}
                   </div>
                 ) : null}
 
@@ -265,7 +271,7 @@ export function DcaPlanModal({ open, onClose }: DcaPlanModalProps) {
                     <select className="input" value={weekday} onChange={(event) => setWeekday(Number(event.target.value))}>
                       {weekdays.map((item) => (
                         <option key={item} value={item}>
-                          {WEEKDAY_LABELS[item]} 00:00
+                          {WEEKDAY_LABELS[item]} {DCA_EXECUTION_TIME_LABEL}
                         </option>
                       ))}
                     </select>
@@ -278,7 +284,7 @@ export function DcaPlanModal({ open, onClose }: DcaPlanModalProps) {
                     <select className="input" value={month} onChange={(event) => setMonth(Number(event.target.value))}>
                       {months.map((item) => (
                         <option key={item} value={item}>
-                          {item} 月 1 日 00:00
+                          {item} 月 1 日 {DCA_EXECUTION_TIME_LABEL}
                         </option>
                       ))}
                     </select>
