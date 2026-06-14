@@ -34,6 +34,11 @@ body {
 }
 
 @layer components {
+  .app-header {
+    padding-top: constant(safe-area-inset-top);
+    padding-top: env(safe-area-inset-top);
+  }
+
   .surface {
     @apply rounded-lg border border-slate-200 bg-[#FFFDF8] shadow-soft transition duration-200 ease-out dark:border-slate-800 dark:bg-slate-900;
   }

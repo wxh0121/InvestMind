@@ -99,8 +99,11 @@ export function Dashboard() {
               {fxUpdatedText ? ` · 汇率 ${fxUpdatedText}` : ""}
             </p>
           </div>
-          <div className="flex justify-start sm:justify-end">
+          <div className="flex max-w-2xl flex-col items-start gap-2 sm:items-end xl:max-w-none xl:flex-row xl:items-center xl:justify-end">
             <RefreshButton />
+            <p className="text-xs leading-5 text-slate-400 dark:text-slate-500 lg:whitespace-nowrap">
+              今天波动大？不刷新也无妨。InvestMind 相信：慢即是快，长线终将回暖。
+            </p>
           </div>
         </div>
       </section>
