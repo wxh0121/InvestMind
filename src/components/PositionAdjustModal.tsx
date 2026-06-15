@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { usePortfolio } from "@/context/PortfolioContext";
 import type { Holding } from "@/types/holding";
@@ -45,7 +45,7 @@ const getChinaCloseTime = (from = new Date()) => {
 const isBeforeChinaClose = (from = new Date()) => from.getTime() < getChinaCloseTime(from).getTime();
 
 export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModalProps) {
-  const { holdings, adjustPosition } = usePortfolio();
+  const { holdings, adjustPosition, queuePositionAdjustment } = usePortfolio();
   const [holdingId, setHoldingId] = useState("");
   const [inputMode, setInputMode] = useState<PositionInputMode>("QUANTITY");
   const [quantity, setQuantity] = useState("");
@@ -53,11 +53,9 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
   const [manualPriceEnabled, setManualPriceEnabled] = useState(false);
   const [manualPrice, setManualPrice] = useState("");
   const [closePriceEnabled, setClosePriceEnabled] = useState(false);
-  const [waitingForClose, setWaitingForClose] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionLabel = type === "BUY" ? "加仓" : "减仓";
   const closePriceLabel = `收盘价格${actionLabel}`;
   const eligibleHoldings = useMemo(
@@ -65,7 +63,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
     [holdings, type]
   );
   const selectedHolding = eligibleHoldings.find((holding) => holding.id === holdingId);
-  const formLocked = saving || waitingForClose;
+  const formLocked = saving;
   const estimatedPrice = manualPriceEnabled ? Number(manualPrice) : (selectedHolding?.currentPrice ?? 0);
   const estimatedAmount = Number(amount);
   const estimatedQuantity =
@@ -83,12 +81,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
     formLocked;
 
   useEffect(() => {
-    if (closeTimerRef.current) {
-      clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
     if (!open) {
-      setWaitingForClose(false);
       setSaving(false);
       return;
     }
@@ -99,7 +92,6 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
     setManualPriceEnabled(false);
     setManualPrice("");
     setClosePriceEnabled(false);
-    setWaitingForClose(false);
     setSaving(false);
     setMessage("");
     setError("");
@@ -112,15 +104,6 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
     setManualPrice("");
   }, [holdingId, open, selectedHolding]);
 
-  useEffect(
-    () => () => {
-      if (closeTimerRef.current) {
-        clearTimeout(closeTimerRef.current);
-      }
-    },
-    []
-  );
-
   if (!open) return null;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -129,7 +112,6 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
     setError("");
 
     const executeAdjustment = async () => {
-      setWaitingForClose(false);
       setSaving(true);
       const result = await adjustPosition({
         holdingId,
@@ -150,24 +132,25 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
     try {
       if (closePriceEnabled && !manualPriceEnabled && isBeforeChinaClose()) {
         const closeAt = getChinaCloseTime();
-        const delay = closeAt.getTime() - Date.now();
-        setWaitingForClose(true);
-        setMessage(`已等待至今日 ${CLOSE_PRICE_LABEL} 执行${actionLabel}，请保持当前页面开启。`);
-        closeTimerRef.current = setTimeout(() => {
-          closeTimerRef.current = null;
-          void executeAdjustment().catch((delayedError) => {
-            setSaving(false);
-            setWaitingForClose(false);
-            setError(delayedError instanceof Error ? delayedError.message : `${actionLabel}失败`);
-          });
-        }, delay);
+        setSaving(true);
+        await queuePositionAdjustment({
+          holdingId,
+          type,
+          quantity: inputMode === "QUANTITY" ? Number(quantity) : undefined,
+          amount: inputMode === "AMOUNT" ? Number(amount) : undefined,
+          executeAt: closeAt.toISOString()
+        });
+        setQuantity("");
+        setAmount("");
+        setManualPrice("");
+        setSaving(false);
+        setMessage(`已加入后台待执行，将在今日 ${CLOSE_PRICE_LABEL} 自动按收盘价${actionLabel}。`);
         return;
       }
 
       await executeAdjustment();
     } catch (submitError) {
       setSaving(false);
-      setWaitingForClose(false);
       setError(submitError instanceof Error ? submitError.message : `${actionLabel}失败`);
     }
   };
@@ -332,7 +315,7 @@ export function PositionAdjustModal({ open, type, onClose }: PositionAdjustModal
             type="submit"
             disabled={submitDisabled}
           >
-            {waitingForClose ? "等待收盘" : saving ? "处理中" : `确认${actionLabel}`}
+            {saving ? "处理中" : `确认${actionLabel}`}
           </button>
         </div>
       </form>

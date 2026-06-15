@@ -1,5 +1,6 @@
 import { db } from "@/db";
 import type { DcaPlan, DcaPlanDraft } from "@/types/dcaPlan";
+import type { PendingPositionAdjustment, PendingPositionAdjustmentDraft } from "@/types/positionAdjustment";
 import type { AssetType, DataSource, Holding, HoldingDraft, Market } from "@/types/holding";
 import type { PortfolioSnapshot } from "@/types/portfolio";
 import {
@@ -28,6 +29,7 @@ export interface BackupPayload {
   holdings: Holding[];
   snapshots: PortfolioSnapshot[];
   dcaPlans?: DcaPlan[];
+  pendingPositionAdjustments?: PendingPositionAdjustment[];
   settings: PortfolioSettings;
 }
 
@@ -172,6 +174,25 @@ export const deleteDcaPlan = async (id: string) => {
   await db.dcaPlans.delete(id);
 };
 
+export const savePendingPositionAdjustment = async (
+  draft: PendingPositionAdjustmentDraft | PendingPositionAdjustment
+) => {
+  const now = new Date().toISOString();
+  const adjustment: PendingPositionAdjustment = {
+    ...draft,
+    id: draft.id || crypto.randomUUID(),
+    status: draft.status ?? "PENDING",
+    createdAt: draft.createdAt ?? now,
+    updatedAt: now
+  };
+  await db.pendingPositionAdjustments.put(adjustment);
+  return adjustment;
+};
+
+export const deletePendingPositionAdjustment = async (id: string) => {
+  await db.pendingPositionAdjustments.delete(id);
+};
+
 export const replaceHoldings = async (holdings: Holding[]) => {
   await db.transaction("rw", db.holdings, async () => {
     await db.holdings.clear();
@@ -180,18 +201,23 @@ export const replaceHoldings = async (holdings: Holding[]) => {
 };
 
 export const clearLocalPortfolio = async () => {
-  await db.transaction("rw", [db.holdings, db.snapshots, db.settings, db.transactions, db.dcaPlans], async () => {
-    await db.holdings.clear();
-    await db.snapshots.clear();
-    await db.transactions.clear();
-    await db.dcaPlans.clear();
-    await db.settings.clear();
-    await db.settings.put({
-      key: SETTINGS_KEY,
-      value: DEFAULT_SETTINGS,
-      updatedAt: new Date().toISOString()
-    } satisfies SettingRecord<PortfolioSettings>);
-  });
+  await db.transaction(
+    "rw",
+    [db.holdings, db.snapshots, db.settings, db.transactions, db.dcaPlans, db.pendingPositionAdjustments],
+    async () => {
+      await db.holdings.clear();
+      await db.snapshots.clear();
+      await db.transactions.clear();
+      await db.dcaPlans.clear();
+      await db.pendingPositionAdjustments.clear();
+      await db.settings.clear();
+      await db.settings.put({
+        key: SETTINGS_KEY,
+        value: DEFAULT_SETTINGS,
+        updatedAt: new Date().toISOString()
+      } satisfies SettingRecord<PortfolioSettings>);
+    }
+  );
 };
 
 export const getSettings = async (): Promise<PortfolioSettings> => {
@@ -233,6 +259,7 @@ export const exportBackup = async (): Promise<BackupPayload> => ({
   holdings: await db.holdings.toArray(),
   snapshots: await db.snapshots.orderBy("createdAt").reverse().toArray(),
   dcaPlans: await db.dcaPlans.orderBy("nextRunAt").toArray(),
+  pendingPositionAdjustments: await db.pendingPositionAdjustments.orderBy("executeAt").toArray(),
   settings: await getSettings()
 });
 
@@ -241,17 +268,25 @@ export const importBackup = async (payload: BackupPayload) => {
     throw new Error("备份文件格式不正确");
   }
 
-  await db.transaction("rw", db.holdings, db.snapshots, db.settings, db.dcaPlans, async () => {
-    await db.holdings.clear();
-    await db.holdings.bulkPut(payload.holdings.map(normalizeHolding));
-    if (Array.isArray(payload.snapshots)) {
-      await db.snapshots.clear();
-      await db.snapshots.bulkPut(payload.snapshots);
+  await db.transaction(
+    "rw",
+    [db.holdings, db.snapshots, db.settings, db.dcaPlans, db.pendingPositionAdjustments],
+    async () => {
+      await db.holdings.clear();
+      await db.holdings.bulkPut(payload.holdings.map(normalizeHolding));
+      if (Array.isArray(payload.snapshots)) {
+        await db.snapshots.clear();
+        await db.snapshots.bulkPut(payload.snapshots);
+      }
+      await db.dcaPlans.clear();
+      if (Array.isArray(payload.dcaPlans)) {
+        await db.dcaPlans.bulkPut(payload.dcaPlans);
+      }
+      await db.pendingPositionAdjustments.clear();
+      if (Array.isArray(payload.pendingPositionAdjustments)) {
+        await db.pendingPositionAdjustments.bulkPut(payload.pendingPositionAdjustments);
+      }
+      await saveSettings(normalizeSettings(payload.settings as LegacyPortfolioSettings));
     }
-    await db.dcaPlans.clear();
-    if (Array.isArray(payload.dcaPlans)) {
-      await db.dcaPlans.bulkPut(payload.dcaPlans);
-    }
-    await saveSettings(normalizeSettings(payload.settings as LegacyPortfolioSettings));
-  });
+  );
 };

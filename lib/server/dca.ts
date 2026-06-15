@@ -9,6 +9,7 @@ import {
   type Market
 } from "../../src/types/holding.js";
 import type { DcaPlan } from "../../src/types/dcaPlan.js";
+import type { PendingPositionAdjustment } from "../../src/types/positionAdjustment.js";
 import type { AllocationEntry, CurrencyRateMap, PortfolioSnapshot, PortfolioSummary } from "../../src/types/portfolio.js";
 import type { PortfolioSettings } from "../../src/types/settings.js";
 import { ensureSchema, query } from "./db.js";
@@ -23,6 +24,7 @@ interface BackupPayload {
   holdings: Holding[];
   snapshots?: PortfolioSnapshot[];
   dcaPlans?: DcaPlan[];
+  pendingPositionAdjustments?: PendingPositionAdjustment[];
   settings: PortfolioSettings;
 }
 
@@ -37,6 +39,12 @@ interface PlanExecutionResult {
   success: boolean;
 }
 
+interface PendingAdjustmentExecutionResult {
+  holdings: Holding[];
+  adjustment: PendingPositionAdjustment;
+  success: boolean;
+}
+
 export interface DcaCronSummary {
   ok: boolean;
   startedAt: string;
@@ -47,6 +55,9 @@ export interface DcaCronSummary {
   plansSucceeded: number;
   plansFailed: number;
   plansMigrated: number;
+  adjustmentsDue: number;
+  adjustmentsSucceeded: number;
+  adjustmentsFailed: number;
   errors: Array<{ userId?: string; message: string }>;
 }
 
@@ -59,6 +70,21 @@ const DCA_EXECUTION_HOUR = 15;
 const DCA_EXECUTION_MINUTE = 30;
 
 const isCashHolding = (holding: Holding) => holding.market === "CASH" || holding.assetType === "CASH";
+
+const createCashHolding = (currency: Holding["currency"], amount: number) =>
+  recomputeHolding({
+    name: `${currency} 现金`,
+    symbol: `CASH-${currency}`,
+    market: "CASH",
+    assetType: "CASH",
+    currency,
+    quantity: roundPositionNumber(amount),
+    averageCost: 1,
+    currentPrice: 1,
+    previousClose: 1,
+    dataSource: "MANUAL",
+    note: ""
+  });
 
 const getChinaDateParts = (date: Date) => {
   const shifted = new Date(date.getTime() + CHINA_TIME_OFFSET_MS);
@@ -395,6 +421,141 @@ const executeDcaPlan = async (
   }
 };
 
+const withPendingAdjustmentResult = (
+  adjustment: PendingPositionAdjustment,
+  now: Date,
+  status: "SUCCESS" | "FAILED",
+  message: string
+): PendingPositionAdjustment => ({
+  ...adjustment,
+  status,
+  executedAt: now.toISOString(),
+  lastMessage: message,
+  updatedAt: now.toISOString()
+});
+
+const isPendingAdjustmentDue = (adjustment: PendingPositionAdjustment, nowMs: number) => {
+  if (adjustment.status !== "PENDING") return false;
+  const executeAtMs = new Date(adjustment.executeAt).getTime();
+  return Number.isFinite(executeAtMs) && executeAtMs <= nowMs;
+};
+
+const executePendingAdjustment = async (
+  holdings: Holding[],
+  adjustment: PendingPositionAdjustment,
+  now: Date
+): Promise<PendingAdjustmentExecutionResult> => {
+  try {
+    const holding = holdings.find((item) => item.id === adjustment.holdingId);
+    if (!holding) throw new Error("未找到该持仓");
+
+    const update = await refreshHoldingPrice(holding);
+    const price = update.currentPrice;
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error("未查询到有效的收盘价格");
+    }
+
+    const amountInput = Number(adjustment.amount);
+    const quantityInput = Number(adjustment.quantity);
+    const hasAmount =
+      adjustment.inputMode === "AMOUNT" && Number.isFinite(amountInput) && amountInput > 0;
+    const hasQuantity =
+      adjustment.inputMode === "QUANTITY" && Number.isFinite(quantityInput) && quantityInput > 0;
+    if (!hasAmount && !hasQuantity) {
+      throw new Error("待执行数量或金额必须大于 0");
+    }
+
+    const adjustmentQuantity = roundPositionNumber(hasAmount ? amountInput / price : quantityInput);
+    const cashDelta = roundPositionNumber(hasAmount ? amountInput : adjustmentQuantity * price);
+    if (!Number.isFinite(adjustmentQuantity) || adjustmentQuantity <= 0 || cashDelta <= 0) {
+      throw new Error("计算出的加减仓数量或金额无效");
+    }
+
+    const refreshedHolding = recomputeHolding({
+      ...holding,
+      currentPrice: price,
+      previousClose: update.previousClose ?? holding.previousClose,
+      dataSource: update.source as DataSource
+    });
+
+    if (adjustment.type === "SELL" && adjustmentQuantity > refreshedHolding.quantity) {
+      throw new Error("减仓数量不能大于当前持仓数量");
+    }
+
+    const cashHolding = holdings.find(
+      (item) => isCashHolding(item) && item.currency === refreshedHolding.currency
+    );
+    const cashBalance = cashHolding?.marketValue ?? cashHolding?.quantity ?? 0;
+    if (adjustment.type === "BUY" && (!cashHolding || cashBalance < cashDelta)) {
+      throw new Error(
+        `扣款失败：现金不足，需要 ${cashDelta} ${refreshedHolding.currency}，当前 ${cashBalance} ${refreshedHolding.currency}`
+      );
+    }
+
+    const nextQuantity =
+      adjustment.type === "BUY"
+        ? refreshedHolding.quantity + adjustmentQuantity
+        : refreshedHolding.quantity - adjustmentQuantity;
+    const nextAverageCost =
+      adjustment.type === "BUY"
+        ? (refreshedHolding.quantity * refreshedHolding.averageCost + adjustmentQuantity * price) / nextQuantity
+        : nextQuantity > 0
+          ? refreshedHolding.averageCost
+          : 0;
+    const savedHolding = recomputeHolding({
+      ...refreshedHolding,
+      quantity: roundPositionNumber(nextQuantity),
+      averageCost: roundPositionNumber(nextAverageCost),
+      currentPrice: price,
+      previousClose: update.previousClose ?? refreshedHolding.previousClose
+    });
+
+    const savedCash = cashHolding
+      ? recomputeHolding({
+          ...cashHolding,
+          quantity:
+            adjustment.type === "BUY"
+              ? roundPositionNumber(cashHolding.quantity - cashDelta)
+              : roundPositionNumber(cashHolding.quantity + cashDelta),
+          averageCost: 1,
+          currentPrice: 1,
+          previousClose: 1,
+          dataSource: "MANUAL"
+        })
+      : createCashHolding(refreshedHolding.currency, cashDelta);
+    const nextHoldings = cashHolding
+      ? holdings.map((item) => {
+          if (item.id === savedHolding.id) return savedHolding;
+          if (item.id === savedCash.id) return savedCash;
+          return item;
+        })
+      : holdings.map((item) => (item.id === savedHolding.id ? savedHolding : item)).concat(savedCash);
+    const actionLabel = adjustment.type === "BUY" ? "加仓" : "减仓";
+
+    return {
+      holdings: nextHoldings,
+      adjustment: withPendingAdjustmentResult(
+        adjustment,
+        now,
+        "SUCCESS",
+        `${actionLabel}成功：成交价 ${price} ${refreshedHolding.currency}，数量 ${adjustmentQuantity}，金额 ${cashDelta} ${refreshedHolding.currency}`
+      ),
+      success: true
+    };
+  } catch (error) {
+    return {
+      holdings,
+      adjustment: withPendingAdjustmentResult(
+        adjustment,
+        now,
+        "FAILED",
+        error instanceof Error ? error.message : "收盘价加减仓失败"
+      ),
+      success: false
+    };
+  }
+};
+
 const processPortfolioPayload = async (
   payload: BackupPayload,
   now: Date,
@@ -406,7 +567,11 @@ const processPortfolioPayload = async (
   let successfulRun = false;
   let holdings = payload.holdings.map(recomputeHolding);
   const plans = Array.isArray(payload.dcaPlans) ? payload.dcaPlans : [];
+  const pendingAdjustments = Array.isArray(payload.pendingPositionAdjustments)
+    ? payload.pendingPositionAdjustments
+    : [];
   const nextPlans: DcaPlan[] = [];
+  const nextAdjustments: PendingPositionAdjustment[] = [];
   const weekendCronRun = isChinaWeekend(now);
 
   for (const rawPlan of plans) {
@@ -471,6 +636,26 @@ const processPortfolioPayload = async (
     }
   }
 
+  for (const rawAdjustment of pendingAdjustments) {
+    if (!isPendingAdjustmentDue(rawAdjustment, nowMs)) {
+      nextAdjustments.push(rawAdjustment);
+      continue;
+    }
+
+    summary.adjustmentsDue += 1;
+    const result = await executePendingAdjustment(holdings, rawAdjustment, now);
+    holdings = result.holdings;
+    nextAdjustments.push(result.adjustment);
+    changed = true;
+
+    if (result.success) {
+      successfulRun = true;
+      summary.adjustmentsSucceeded += 1;
+    } else {
+      summary.adjustmentsFailed += 1;
+    }
+  }
+
   if (!changed) {
     return { payload, changed: false, successfulRun: false };
   }
@@ -483,6 +668,9 @@ const processPortfolioPayload = async (
       exportedAt: nowIso,
       holdings,
       dcaPlans: nextPlans.sort((first, second) => first.nextRunAt.localeCompare(second.nextRunAt)),
+      pendingPositionAdjustments: nextAdjustments.sort((first, second) =>
+        first.executeAt.localeCompare(second.executeAt)
+      ),
       snapshots: successfulRun
         ? [createSnapshot(holdings, nowIso), ...(payload.snapshots ?? [])].slice(0, 500)
         : payload.snapshots
@@ -502,6 +690,9 @@ export const runDueDcaPlans = async (): Promise<DcaCronSummary> => {
     plansSucceeded: 0,
     plansFailed: 0,
     plansMigrated: 0,
+    adjustmentsDue: 0,
+    adjustmentsSucceeded: 0,
+    adjustmentsFailed: 0,
     errors: []
   };
 

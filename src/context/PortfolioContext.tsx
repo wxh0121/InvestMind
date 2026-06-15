@@ -17,6 +17,7 @@ import {
   clearLocalPortfolio,
   deleteHolding,
   deleteDcaPlan,
+  deletePendingPositionAdjustment,
   exportBackup,
   getDcaPlans,
   getHoldings,
@@ -24,6 +25,7 @@ import {
   importBackup,
   saveDcaPlan,
   saveHolding,
+  savePendingPositionAdjustment,
   saveSettings
 } from "@/services/portfolioService";
 import { analyzePortfolio } from "@/services/analysisService";
@@ -54,6 +56,14 @@ interface PositionAdjustmentResult {
   price: number;
   quantity: number;
   amount: number;
+}
+
+interface QueuedPositionAdjustmentInput {
+  holdingId: string;
+  type: PositionAdjustmentType;
+  quantity?: number;
+  amount?: number;
+  executeAt: string;
 }
 
 const roundPositionNumber = (value: number) => Number(value.toFixed(8));
@@ -107,6 +117,7 @@ interface PortfolioContextValue {
   upsertHolding: (draft: HoldingDraft | Holding) => Promise<void>;
   removeHolding: (id: string) => Promise<void>;
   adjustPosition: (input: PositionAdjustmentInput) => Promise<PositionAdjustmentResult>;
+  queuePositionAdjustment: (input: QueuedPositionAdjustmentInput) => Promise<void>;
   updateSettings: (settings: PortfolioSettings) => Promise<void>;
   refreshAll: () => Promise<void>;
   upsertDcaPlan: (draft: DcaPlanDraft | DcaPlan) => Promise<void>;
@@ -420,6 +431,61 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     [syncCloudBackup]
   );
 
+  const queuePositionAdjustment = useCallback(
+    async ({ holdingId, type, quantity, amount, executeAt }: QueuedPositionAdjustmentInput) => {
+      if (!user) {
+        throw new Error("请先登录账号，收盘价后台执行需要同步到云端");
+      }
+
+      const currentHoldings = await getHoldings();
+      const holding = currentHoldings.find((item) => item.id === holdingId);
+      if (!holding) {
+        throw new Error("未找到该持仓");
+      }
+      if (holding.dataSource === "MANUAL") {
+        throw new Error("手动录入资产无法使用收盘价后台执行");
+      }
+
+      const hasQuantity = quantity !== undefined && Number.isFinite(quantity) && quantity > 0;
+      const hasAmount = amount !== undefined && Number.isFinite(amount) && amount > 0;
+      if (!hasQuantity && !hasAmount) {
+        throw new Error("请输入大于 0 的数量或金额");
+      }
+
+      const executeAtDate = new Date(executeAt);
+      if (!Number.isFinite(executeAtDate.getTime())) {
+        throw new Error("待执行时间无效");
+      }
+
+      const pending = await savePendingPositionAdjustment({
+        holdingId: holding.id,
+        holdingName: holding.name,
+        symbol: holding.symbol,
+        type,
+        inputMode: hasAmount ? "AMOUNT" : "QUANTITY",
+        amount: hasAmount ? Number(amount) : undefined,
+        quantity: hasAmount ? undefined : Number(quantity),
+        executeAt
+      });
+
+      setCloudSyncStatus("syncing");
+      setCloudSyncMessage("正在同步待执行任务");
+
+      try {
+        const result = await saveCloudPortfolio(await exportBackup());
+        setCloudSyncStatus("synced");
+        setCloudSyncMessage("待执行任务已同步云端");
+        setCloudUpdatedAt(result.updatedAt);
+      } catch (error) {
+        await deletePendingPositionAdjustment(pending.id);
+        setCloudSyncStatus("error");
+        setCloudSyncMessage(error instanceof Error ? error.message : "待执行任务同步失败");
+        throw error;
+      }
+    },
+    [user]
+  );
+
   const upsertDcaPlan = useCallback(
     async (draft: DcaPlanDraft | DcaPlan) => {
       const saved = await saveDcaPlan(draft);
@@ -520,6 +586,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       upsertHolding,
       removeHolding,
       adjustPosition,
+      queuePositionAdjustment,
       updateSettings,
       refreshAll,
       upsertDcaPlan,
@@ -547,6 +614,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       upsertHolding,
       removeHolding,
       adjustPosition,
+      queuePositionAdjustment,
       updateSettings,
       refreshAll,
       upsertDcaPlan,
