@@ -1,4 +1,4 @@
-export type ApiSource = "OKX" | "YAHOO" | "EASTMONEY";
+export type ApiSource = "OKX" | "YAHOO" | "EASTMONEY" | "TENCENT" | "SINA";
 
 export interface NormalizedBalance {
   symbol: string;

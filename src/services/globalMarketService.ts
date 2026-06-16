@@ -6,6 +6,7 @@ interface PricePayload {
     currentPrice: number;
     previousClose: number;
     currency?: string;
+    source?: GlobalMarketItem["source"];
   }>;
   error?: string;
 }
@@ -13,7 +14,7 @@ interface PricePayload {
 interface MarketDefinition {
   key: GlobalMarketGroupKey;
   label: string;
-  source: "YAHOO" | "OKX" | "EASTMONEY";
+  source: "YAHOO" | "OKX" | "EASTMONEY" | "TENCENT" | "SINA";
   items: Array<{
     key: string;
     label: string;
@@ -25,7 +26,7 @@ const marketDefinitions: MarketDefinition[] = [
   {
     key: "A_SHARE",
     label: "A股",
-    source: "EASTMONEY",
+    source: "TENCENT",
     items: [
       { key: "sse", label: "上证", symbol: "SH000001" },
       { key: "szse", label: "深成", symbol: "SZ399001" },
@@ -88,7 +89,7 @@ const buildQuery = (definition: MarketDefinition) =>
 const getEndpoint = (definition: MarketDefinition) =>
   definition.source === "OKX"
     ? `/api/okx/prices?${buildQuery(definition)}`
-    : `/api/yahoo/prices?${buildQuery(definition)}${definition.source === "EASTMONEY" ? "&market=A_SHARE" : ""}`;
+    : `/api/yahoo/prices?${buildQuery(definition)}${definition.source === "TENCENT" ? "&market=A_SHARE" : ""}`;
 
 const toMarketItem = (
   definition: MarketDefinition,
@@ -106,7 +107,7 @@ const toMarketItem = (
     previousClose: round(previousClose),
     change: round(change),
     changePercent: previousClose ? round((change / previousClose) * 100) : 0,
-    source: definition.source,
+    source: payloadItem.source ?? definition.source,
     currency: payloadItem.currency
   };
 };

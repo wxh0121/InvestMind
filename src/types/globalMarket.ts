@@ -14,7 +14,7 @@ export interface GlobalMarketItem {
   previousClose: number;
   change: number;
   changePercent: number;
-  source: "YAHOO" | "OKX" | "EASTMONEY";
+  source: "YAHOO" | "OKX" | "EASTMONEY" | "TENCENT" | "SINA";
   currency?: string;
 }
 
