@@ -9,6 +9,7 @@ interface CloudPortfolioResponse {
 
 interface CloudSaveResponse {
   ok: boolean;
+  backup?: BackupPayload;
   updatedAt: string;
   error?: string;
 }

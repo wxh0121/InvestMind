@@ -193,6 +193,17 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     try {
       const backup = await exportBackup();
       const result = await saveCloudPortfolio(backup);
+      if (result.backup) {
+        await importBackup(result.backup);
+        const [nextHoldings, nextSettings, nextDcaPlans] = await Promise.all([
+          getHoldings(),
+          getSettings(),
+          getDcaPlans()
+        ]);
+        setHoldings(nextHoldings);
+        setSettings(nextSettings);
+        setDcaPlans(nextDcaPlans);
+      }
       setCloudSyncStatus("synced");
       setCloudSyncMessage("云端已同步");
       setCloudUpdatedAt(result.updatedAt);
@@ -483,6 +494,17 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
 
       try {
         const result = await saveCloudPortfolio(await exportBackup());
+        if (result.backup) {
+          await importBackup(result.backup);
+          const [nextHoldings, nextSettings, nextDcaPlans] = await Promise.all([
+            getHoldings(),
+            getSettings(),
+            getDcaPlans()
+          ]);
+          setHoldings(nextHoldings);
+          setSettings(nextSettings);
+          setDcaPlans(nextDcaPlans);
+        }
         setCloudSyncStatus("synced");
         setCloudSyncMessage("待执行任务已同步云端");
         setCloudUpdatedAt(result.updatedAt);

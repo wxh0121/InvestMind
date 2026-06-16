@@ -18,7 +18,7 @@ import { getOkxPrices } from "./okx.js";
 import type { NormalizedUpdate } from "./types.js";
 import { getYahooPrices } from "./yahoo.js";
 
-interface BackupPayload {
+export interface BackupPayload {
   version: 1;
   exportedAt: string;
   holdings: Holding[];
@@ -272,7 +272,7 @@ const createSnapshot = (holdings: Holding[], createdAt: string): PortfolioSnapsh
   };
 };
 
-const isBackupPayload = (value: unknown): value is BackupPayload => {
+export const isBackupPayload = (value: unknown): value is BackupPayload => {
   if (!value || typeof value !== "object") return false;
   const payload = value as Partial<BackupPayload>;
   return payload.version === 1 && Array.isArray(payload.holdings) && Boolean(payload.settings);
@@ -556,7 +556,23 @@ const executePendingAdjustment = async (
   }
 };
 
-const processPortfolioPayload = async (
+export const createDcaCronSummary = (startedAt = new Date()): DcaCronSummary => ({
+  ok: true,
+  startedAt: startedAt.toISOString(),
+  finishedAt: startedAt.toISOString(),
+  portfoliosScanned: 0,
+  portfoliosUpdated: 0,
+  plansDue: 0,
+  plansSucceeded: 0,
+  plansFailed: 0,
+  plansMigrated: 0,
+  adjustmentsDue: 0,
+  adjustmentsSucceeded: 0,
+  adjustmentsFailed: 0,
+  errors: []
+});
+
+export const processDuePortfolioPayload = async (
   payload: BackupPayload,
   now: Date,
   summary: DcaCronSummary
@@ -680,21 +696,7 @@ const processPortfolioPayload = async (
 
 export const runDueDcaPlans = async (): Promise<DcaCronSummary> => {
   const startedAt = new Date();
-  const summary: DcaCronSummary = {
-    ok: true,
-    startedAt: startedAt.toISOString(),
-    finishedAt: startedAt.toISOString(),
-    portfoliosScanned: 0,
-    portfoliosUpdated: 0,
-    plansDue: 0,
-    plansSucceeded: 0,
-    plansFailed: 0,
-    plansMigrated: 0,
-    adjustmentsDue: 0,
-    adjustmentsSucceeded: 0,
-    adjustmentsFailed: 0,
-    errors: []
-  };
+  const summary = createDcaCronSummary(startedAt);
 
   await ensureSchema();
   const result = await query<PortfolioRow>("select user_id, payload from investmind_portfolios");
@@ -706,7 +708,7 @@ export const runDueDcaPlans = async (): Promise<DcaCronSummary> => {
         throw new Error("云端备份格式不正确");
       }
 
-      const processed = await processPortfolioPayload(row.payload, startedAt, summary);
+      const processed = await processDuePortfolioPayload(row.payload, startedAt, summary);
       if (!processed.changed) continue;
 
       await query(

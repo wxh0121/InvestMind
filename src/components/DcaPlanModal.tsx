@@ -321,6 +321,7 @@ export function DcaPlanModal({ open, onClose }: DcaPlanModalProps) {
                         <p>{describeDcaSchedule(plan)} · 下次 {formatDcaDateTime(plan.nextRunAt)}</p>
                         {plan.lastMessage ? (
                           <p className={plan.lastStatus === "FAILED" ? "text-rose-600 dark:text-rose-300" : "text-emerald-600 dark:text-emerald-300"}>
+                            {plan.lastRunAt ? `上次 ${formatDcaDateTime(plan.lastRunAt)} · ` : ""}
                             {plan.lastMessage}
                           </p>
                         ) : null}
