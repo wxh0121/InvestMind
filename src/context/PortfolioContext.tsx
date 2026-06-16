@@ -137,7 +137,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
   const [fxRates, setFxRates] = useState<CurrencyRateMap>({ [DEFAULT_SETTINGS.baseCurrency]: 1 });
   const [fxUpdatedAt, setFxUpdatedAt] = useState<string | undefined>();
   const [fxLoading, setFxLoading] = useState(false);
+  const [fxReady, setFxReady] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [localLoaded, setLocalLoaded] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>("idle");
   const [refreshMessage, setRefreshMessage] = useState("");
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>("local");
@@ -171,6 +173,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       setSettings(nextSettings);
       setDcaPlans(nextDcaPlans);
     } finally {
+      setLocalLoaded(true);
       setLoading(false);
     }
   }, []);
@@ -202,12 +205,15 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
   const hydrateCloudPortfolio = useCallback(async () => {
     if (!user) return;
 
-    setLoading(true);
+    const localOwner = getLocalOwner();
+    const canUseLocalData = localOwner === user.id && (holdings.length > 0 || dcaPlans.length > 0);
+    if (!canUseLocalData) {
+      setLoading(true);
+    }
     setCloudSyncStatus("syncing");
     setCloudSyncMessage("正在读取云端持仓");
 
     try {
-      const localOwner = getLocalOwner();
       if (localOwner && localOwner !== user.id) {
         await clearLocalPortfolio();
         clearLocalOwner();
@@ -238,16 +244,18 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       setCloudSyncStatus("error");
       setCloudSyncMessage(error instanceof Error ? error.message : "云端同步失败");
     } finally {
-      setLoading(false);
+      if (!canUseLocalData) {
+        setLoading(false);
+      }
     }
-  }, [user]);
+  }, [dcaPlans.length, holdings.length, user]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
 
   useEffect(() => {
-    if (authLoading) return;
+    if (authLoading || !localLoaded) return;
 
     if (!user) {
       cloudHydratedUserRef.current = null;
@@ -266,7 +274,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     previousUserIdRef.current = user.id;
     cloudHydratedUserRef.current = user.id;
     void hydrateCloudPortfolio();
-  }, [authLoading, clearLocalData, hydrateCloudPortfolio, user]);
+  }, [authLoading, clearLocalData, hydrateCloudPortfolio, localLoaded, user]);
 
   const currencies = useMemo(
     () => Array.from(new Set([settings.baseCurrency, ...holdings.map((holding) => holding.currency)])),
@@ -286,6 +294,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
           [settings.baseCurrency]: 1
         });
         setFxUpdatedAt(result.updatedAt);
+        setFxReady(true);
       })
       .catch(() => {
         if (cancelled) return;
@@ -293,6 +302,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
           ...current,
           [settings.baseCurrency]: 1
         }));
+        setFxReady(true);
       })
       .finally(() => {
         if (!cancelled) setFxLoading(false);
@@ -576,7 +586,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       fxRates,
       fxUpdatedAt,
       dcaPlans,
-      loading: loading || fxLoading,
+      loading: loading || (!fxReady && fxLoading),
       refreshStatus,
       refreshMessage,
       cloudSyncStatus,
@@ -605,6 +615,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       fxUpdatedAt,
       loading,
       fxLoading,
+      fxReady,
       refreshStatus,
       refreshMessage,
       cloudSyncStatus,
