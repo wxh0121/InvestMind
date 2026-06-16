@@ -13,7 +13,7 @@ interface PricePayload {
 interface MarketDefinition {
   key: GlobalMarketGroupKey;
   label: string;
-  source: "YAHOO" | "OKX";
+  source: "YAHOO" | "OKX" | "EASTMONEY";
   items: Array<{
     key: string;
     label: string;
@@ -25,7 +25,7 @@ const marketDefinitions: MarketDefinition[] = [
   {
     key: "A_SHARE",
     label: "A股",
-    source: "YAHOO",
+    source: "EASTMONEY",
     items: [
       { key: "sse", label: "上证", symbol: "SH000001" },
       { key: "szse", label: "深成", symbol: "SZ399001" },
@@ -88,7 +88,7 @@ const buildQuery = (definition: MarketDefinition) =>
 const getEndpoint = (definition: MarketDefinition) =>
   definition.source === "OKX"
     ? `/api/okx/prices?${buildQuery(definition)}`
-    : `/api/yahoo/prices?${buildQuery(definition)}`;
+    : `/api/yahoo/prices?${buildQuery(definition)}${definition.source === "EASTMONEY" ? "&market=A_SHARE" : ""}`;
 
 const toMarketItem = (
   definition: MarketDefinition,
