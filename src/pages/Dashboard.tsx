@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowUpRight,
@@ -12,9 +13,11 @@ import { RefreshButton } from "@/components/RefreshButton";
 import { SummaryCard } from "@/components/SummaryCard";
 import { usePortfolio } from "@/context/PortfolioContext";
 import { MARKET_LABELS, type Holding, type Market } from "@/types/holding";
+import type { CurrencyRateMap, PortfolioSnapshot, PortfolioSummary } from "@/types/portfolio";
 import { convertCurrency } from "@/utils/calculations";
 import { formatCompactCurrency, formatCurrency, formatPercent } from "@/utils/format";
 
+const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 const pnlTone = (value: number) => (value > 0 ? "profit" : value < 0 ? "loss" : "neutral");
 const pnlTextClass = (value: number) =>
   value > 0
@@ -22,6 +25,9 @@ const pnlTextClass = (value: number) =>
     : value < 0
       ? "text-rose-600 dark:text-rose-300"
       : "text-slate-500 dark:text-slate-400";
+const roundMoney = (value: number) => Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
+const roundPercent = (value: number) =>
+  Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
 
 const suggestionMarkets: Market[] = [
   "A_SHARE",
@@ -31,6 +37,115 @@ const suggestionMarkets: Market[] = [
   "ASIA_PACIFIC",
   "EUROPE"
 ];
+
+const timestampMs = (value?: string) => {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+};
+
+const getBeijingDayStart = (date = new Date()) => {
+  const shifted = new Date(date.getTime() + CHINA_TIME_OFFSET_MS);
+  return new Date(
+    Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
+      CHINA_TIME_OFFSET_MS
+  );
+};
+
+const selectBeijingDayBaseline = (snapshots: PortfolioSnapshot[]) => {
+  const dayStartMs = getBeijingDayStart().getTime();
+  const validSnapshots = snapshots
+    .map((snapshot) => ({ snapshot, time: timestampMs(snapshot.createdAt) }))
+    .filter((item) => item.time > 0);
+  const beforeDayStart = validSnapshots
+    .filter((item) => item.time <= dayStartMs)
+    .sort((first, second) => second.time - first.time)[0];
+  if (beforeDayStart) return beforeDayStart.snapshot;
+
+  return validSnapshots
+    .filter((item) => item.time > dayStartMs)
+    .sort((first, second) => first.time - second.time)[0]?.snapshot;
+};
+
+const holdingMarketValue = (holding: Holding) =>
+  holding.marketValue ?? roundMoney(holding.quantity * holding.currentPrice);
+
+const convertedHoldingValue = (holding: Holding, rates: CurrencyRateMap) =>
+  convertCurrency(holdingMarketValue(holding), holding.currency, rates);
+
+const sumConvertedMarketValue = (holdings: Holding[], rates: CurrencyRateMap) =>
+  roundMoney(holdings.reduce((sum, holding) => sum + convertedHoldingValue(holding, rates), 0));
+
+const buildMarketTotals = (holdings: Holding[], rates: CurrencyRateMap) =>
+  holdings.reduce<Record<string, number>>((totals, holding) => {
+    totals[holding.market] = roundMoney((totals[holding.market] ?? 0) + convertedHoldingValue(holding, rates));
+    return totals;
+  }, {});
+
+const buildFallbackTodayPnLByMarket = (holdings: Holding[], rates: CurrencyRateMap) =>
+  holdings.reduce<Record<string, number>>((acc, holding) => {
+    acc[holding.market] =
+      (acc[holding.market] ?? 0) + convertCurrency(holding.todayPnL, holding.currency, rates);
+    return acc;
+  }, {});
+
+const buildBeijingDayMetrics = (
+  holdings: Holding[],
+  summary: PortfolioSummary,
+  snapshots: PortfolioSnapshot[],
+  rates: CurrencyRateMap
+) => {
+  const baseline = selectBeijingDayBaseline(snapshots);
+  if (!baseline?.holdings?.length) {
+    return {
+      todayPnL: summary.todayPnL,
+      todayPnLPercent: summary.todayPnLPercent,
+      marketTodayPnL: buildFallbackTodayPnLByMarket(holdings, rates),
+      holdings
+    };
+  }
+
+  const baselineTotal = sumConvertedMarketValue(baseline.holdings, rates);
+  if (!baselineTotal) {
+    return {
+      todayPnL: summary.todayPnL,
+      todayPnLPercent: summary.todayPnLPercent,
+      marketTodayPnL: buildFallbackTodayPnLByMarket(holdings, rates),
+      holdings
+    };
+  }
+
+  const baselineMarketTotals = buildMarketTotals(baseline.holdings, rates);
+  const currentMarketTotals = buildMarketTotals(holdings, rates);
+  const marketTodayPnL = Object.fromEntries(
+    Array.from(new Set([...Object.keys(currentMarketTotals), ...Object.keys(baselineMarketTotals)])).map((market) => [
+      market,
+      roundMoney((currentMarketTotals[market] ?? 0) - (baselineMarketTotals[market] ?? 0))
+    ])
+  );
+  const baselineHoldingValues = new Map(baseline.holdings.map((holding) => [holding.id, holdingMarketValue(holding)]));
+  const dailyHoldings = holdings.map((holding) => {
+    const baselineValue = baselineHoldingValues.get(holding.id);
+    if (!baselineValue) return holding;
+
+    const currentValue = holdingMarketValue(holding);
+    const todayPnL = roundMoney(currentValue - baselineValue);
+
+    return {
+      ...holding,
+      todayPnL,
+      todayPnLPercent: baselineValue ? roundPercent((todayPnL / baselineValue) * 100) : holding.todayPnLPercent
+    };
+  });
+  const todayPnL = roundMoney(summary.totalMarketValue - baselineTotal);
+
+  return {
+    todayPnL,
+    todayPnLPercent: roundPercent((todayPnL / baselineTotal) * 100),
+    marketTodayPnL,
+    holdings: dailyHoldings
+  };
+};
 
 const getMarketDecliners = (holdings: Holding[]) =>
   suggestionMarkets
@@ -55,7 +170,11 @@ const getMarketDecliners = (holdings: Holding[]) =>
     });
 
 export function Dashboard() {
-  const { holdings, settings, summary, fxRates, fxUpdatedAt, loading } = usePortfolio();
+  const { holdings, settings, summary, fxRates, fxUpdatedAt, snapshots, loading } = usePortfolio();
+  const beijingDayMetrics = useMemo(
+    () => buildBeijingDayMetrics(holdings, summary, snapshots, fxRates),
+    [fxRates, holdings, snapshots, summary]
+  );
   const fxUpdatedText = fxUpdatedAt
     ? new Date(fxUpdatedAt).toLocaleString("zh-CN", {
         month: "2-digit",
@@ -64,13 +183,10 @@ export function Dashboard() {
         minute: "2-digit"
       })
     : "";
-  const marketTodayPnL = holdings.reduce<Record<string, number>>((acc, holding) => {
-    acc[holding.market] =
-      (acc[holding.market] ?? 0) + convertCurrency(holding.todayPnL, holding.currency, fxRates);
-    return acc;
-  }, {});
-  const marketDecliners = getMarketDecliners(holdings);
-  const chartData = holdings
+  const marketTodayPnL = beijingDayMetrics.marketTodayPnL;
+  const dailyHoldings = beijingDayMetrics.holdings;
+  const marketDecliners = getMarketDecliners(dailyHoldings);
+  const chartData = dailyHoldings
     .slice()
     .sort(
       (a, b) =>
@@ -119,10 +235,10 @@ export function Dashboard() {
         />
         <SummaryCard
           title="今日盈亏"
-          value={formatCurrency(summary.todayPnL, settings.baseCurrency)}
-          subtitle={formatPercent(summary.todayPnLPercent)}
+          value={formatCurrency(beijingDayMetrics.todayPnL, settings.baseCurrency)}
+          subtitle={formatPercent(beijingDayMetrics.todayPnLPercent)}
           icon={<TrendingUp className="h-5 w-5" />}
-          tone={pnlTone(summary.todayPnL)}
+          tone={pnlTone(beijingDayMetrics.todayPnL)}
         />
         <SummaryCard
           title="总浮动盈亏"

@@ -10,7 +10,7 @@ import {
 } from "react";
 import type { Holding, HoldingDraft } from "@/types/holding";
 import type { HoldingAnalysis } from "@/types/analysis";
-import type { CurrencyRateMap, PortfolioSummary } from "@/types/portfolio";
+import type { CurrencyRateMap, PortfolioSnapshot, PortfolioSummary } from "@/types/portfolio";
 import type { BackupPayload } from "@/services/portfolioService";
 import {
   addSnapshot,
@@ -21,6 +21,7 @@ import {
   exportBackup,
   getDcaPlans,
   getHoldings,
+  getSnapshots,
   getSettings,
   importBackup,
   saveDcaPlan,
@@ -107,6 +108,7 @@ interface PortfolioContextValue {
   fxRates: CurrencyRateMap;
   fxUpdatedAt?: string;
   dcaPlans: DcaPlan[];
+  snapshots: PortfolioSnapshot[];
   loading: boolean;
   refreshStatus: RefreshStatus;
   refreshMessage: string;
@@ -133,6 +135,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
   const { user, loading: authLoading } = useAuth();
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [dcaPlans, setDcaPlans] = useState<DcaPlan[]>([]);
+  const [snapshots, setSnapshots] = useState<PortfolioSnapshot[]>([]);
   const [settings, setSettings] = useState<PortfolioSettings>(DEFAULT_SETTINGS);
   const [fxRates, setFxRates] = useState<CurrencyRateMap>({ [DEFAULT_SETTINGS.baseCurrency]: 1 });
   const [fxUpdatedAt, setFxUpdatedAt] = useState<string | undefined>();
@@ -153,6 +156,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     clearLocalOwner();
     setHoldings([]);
     setDcaPlans([]);
+    setSnapshots([]);
     setSettings(DEFAULT_SETTINGS);
     setRefreshStatus("idle");
     setRefreshMessage("");
@@ -164,14 +168,16 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextHoldings, nextSettings, nextDcaPlans] = await Promise.all([
+      const [nextHoldings, nextSettings, nextDcaPlans, nextSnapshots] = await Promise.all([
         getHoldings(),
         getSettings(),
-        getDcaPlans()
+        getDcaPlans(),
+        getSnapshots()
       ]);
       setHoldings(nextHoldings);
       setSettings(nextSettings);
       setDcaPlans(nextDcaPlans);
+      setSnapshots(nextSnapshots);
     } finally {
       setLocalLoaded(true);
       setLoading(false);
@@ -195,14 +201,16 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       const result = await saveCloudPortfolio(backup);
       if (result.backup) {
         await importBackup(result.backup);
-        const [nextHoldings, nextSettings, nextDcaPlans] = await Promise.all([
+        const [nextHoldings, nextSettings, nextDcaPlans, nextSnapshots] = await Promise.all([
           getHoldings(),
           getSettings(),
-          getDcaPlans()
+          getDcaPlans(),
+          getSnapshots()
         ]);
         setHoldings(nextHoldings);
         setSettings(nextSettings);
         setDcaPlans(nextDcaPlans);
+        setSnapshots(nextSnapshots);
       }
       setCloudSyncStatus("synced");
       setCloudSyncMessage("云端已同步");
@@ -234,14 +242,16 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       if (result.backup) {
         await importBackup(result.backup);
         setLocalOwner(user.id);
-        const [nextHoldings, nextSettings, nextDcaPlans] = await Promise.all([
+        const [nextHoldings, nextSettings, nextDcaPlans, nextSnapshots] = await Promise.all([
           getHoldings(),
           getSettings(),
-          getDcaPlans()
+          getDcaPlans(),
+          getSnapshots()
         ]);
         setHoldings(nextHoldings);
         setSettings(nextSettings);
         setDcaPlans(nextDcaPlans);
+        setSnapshots(nextSnapshots);
         setCloudSyncMessage("已从云端恢复");
         setCloudUpdatedAt(result.updatedAt ?? undefined);
       } else {
@@ -443,8 +453,11 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
             return item;
           })
         : currentHoldings.map((item) => (item.id === saved.id ? saved : item)).concat(savedCash);
-      await addSnapshot(nextHoldings);
+      const snapshot = await addSnapshot(nextHoldings);
       setHoldings(nextHoldings);
+      setSnapshots((current) =>
+        [snapshot, ...current].sort((first, second) => second.createdAt.localeCompare(first.createdAt))
+      );
       void syncCloudBackup();
 
       return { holding: saved, price, quantity: adjustmentQuantity, amount: cashDelta };
@@ -496,14 +509,16 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         const result = await saveCloudPortfolio(await exportBackup());
         if (result.backup) {
           await importBackup(result.backup);
-          const [nextHoldings, nextSettings, nextDcaPlans] = await Promise.all([
+          const [nextHoldings, nextSettings, nextDcaPlans, nextSnapshots] = await Promise.all([
             getHoldings(),
             getSettings(),
-            getDcaPlans()
+            getDcaPlans(),
+            getSnapshots()
           ]);
           setHoldings(nextHoldings);
           setSettings(nextSettings);
           setDcaPlans(nextDcaPlans);
+          setSnapshots(nextSnapshots);
         }
         setCloudSyncStatus("synced");
         setCloudSyncMessage("待执行任务已同步云端");
@@ -573,6 +588,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     try {
       const { result, holdings: updatedHoldings } = await refreshPrices(holdings, refreshableHoldings);
       setHoldings(updatedHoldings);
+      setSnapshots(await getSnapshots());
       setRefreshStatus(result.errors.length ? "partial" : "success");
       setRefreshMessage(result.errors.length ? "部分资产刷新失败" : "刷新成功");
       void syncCloudBackup();
@@ -608,6 +624,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       fxRates,
       fxUpdatedAt,
       dcaPlans,
+      snapshots,
       loading: loading || (!fxReady && fxLoading),
       refreshStatus,
       refreshMessage,
@@ -630,6 +647,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     [
       holdings,
       dcaPlans,
+      snapshots,
       settings,
       summary,
       analyses,

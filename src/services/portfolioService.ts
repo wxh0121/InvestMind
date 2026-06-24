@@ -272,11 +272,13 @@ export const addSnapshot = async (holdings: Holding[]) => {
   return snapshot;
 };
 
+export const getSnapshots = async () => db.snapshots.orderBy("createdAt").reverse().toArray();
+
 export const exportBackup = async (): Promise<BackupPayload> => ({
   version: 1,
   exportedAt: new Date().toISOString(),
   holdings: await db.holdings.toArray(),
-  snapshots: await db.snapshots.orderBy("createdAt").reverse().toArray(),
+  snapshots: await getSnapshots(),
   dcaPlans: await db.dcaPlans.orderBy("nextRunAt").toArray(),
   deletedDcaPlans: await db.deletedDcaPlans.orderBy("deletedAt").reverse().limit(1000).toArray(),
   pendingPositionAdjustments: await db.pendingPositionAdjustments.orderBy("executeAt").toArray(),
