@@ -8,7 +8,7 @@ import {
   type HoldingDraft,
   type Market
 } from "../../src/types/holding.js";
-import type { DcaPlan } from "../../src/types/dcaPlan.js";
+import type { DcaPlan, DeletedDcaPlan } from "../../src/types/dcaPlan.js";
 import type { PendingPositionAdjustment } from "../../src/types/positionAdjustment.js";
 import type { AllocationEntry, CurrencyRateMap, PortfolioSnapshot, PortfolioSummary } from "../../src/types/portfolio.js";
 import type { PortfolioSettings } from "../../src/types/settings.js";
@@ -24,6 +24,7 @@ export interface BackupPayload {
   holdings: Holding[];
   snapshots?: PortfolioSnapshot[];
   dcaPlans?: DcaPlan[];
+  deletedDcaPlans?: DeletedDcaPlan[];
   pendingPositionAdjustments?: PendingPositionAdjustment[];
   settings: PortfolioSettings;
 }
@@ -299,6 +300,20 @@ const isPlanDue = (plan: DcaPlan, nowMs: number) => {
   if (!plan.enabled) return false;
   const nextRunMs = new Date(plan.nextRunAt).getTime();
   return Number.isFinite(nextRunMs) && nextRunMs <= nowMs;
+};
+
+const timestampMs = (value?: string | null) => {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+};
+
+const planUpdatedMs = (plan: DcaPlan) =>
+  Math.max(timestampMs(plan.updatedAt), timestampMs(plan.lastRunAt), timestampMs(plan.createdAt));
+
+const isPlanDeleted = (plan: DcaPlan, deletedPlans: Map<string, DeletedDcaPlan>) => {
+  const deleted = deletedPlans.get(plan.id);
+  return Boolean(deleted && timestampMs(deleted.deletedAt) >= planUpdatedMs(plan));
 };
 
 const refreshHoldingPrice = async (holding: Holding): Promise<NormalizedUpdate> => {
@@ -582,13 +597,21 @@ export const processDuePortfolioPayload = async (
   let changed = false;
   let successfulRun = false;
   let holdings = payload.holdings.map(recomputeHolding);
-  const plans = Array.isArray(payload.dcaPlans) ? payload.dcaPlans : [];
+  const deletedPlans = new Map(
+    (Array.isArray(payload.deletedDcaPlans) ? payload.deletedDcaPlans : []).map((plan) => [plan.id, plan])
+  );
+  const rawPlans = Array.isArray(payload.dcaPlans) ? payload.dcaPlans : [];
+  const plans = rawPlans.filter((plan) => !isPlanDeleted(plan, deletedPlans));
   const pendingAdjustments = Array.isArray(payload.pendingPositionAdjustments)
     ? payload.pendingPositionAdjustments
     : [];
   const nextPlans: DcaPlan[] = [];
   const nextAdjustments: PendingPositionAdjustment[] = [];
   const weekendCronRun = isChinaWeekend(now);
+
+  if (plans.length !== rawPlans.length) {
+    changed = true;
+  }
 
   for (const rawPlan of plans) {
     if (rawPlan.frequency === "DAILY" && weekendCronRun) {

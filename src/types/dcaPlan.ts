@@ -23,6 +23,11 @@ export interface DcaPlan {
   updatedAt: string;
 }
 
+export interface DeletedDcaPlan {
+  id: string;
+  deletedAt: string;
+}
+
 export type DcaPlanDraft = Omit<
   DcaPlan,
   "id" | "enabled" | "nextRunAt" | "lastRunAt" | "lastStatus" | "lastMessage" | "createdAt" | "updatedAt"

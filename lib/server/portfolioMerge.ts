@@ -1,4 +1,4 @@
-import type { DcaPlan } from "../../src/types/dcaPlan.js";
+import type { DcaPlan, DeletedDcaPlan } from "../../src/types/dcaPlan.js";
 import type { Holding } from "../../src/types/holding.js";
 import type { PendingPositionAdjustment } from "../../src/types/positionAdjustment.js";
 import type { PortfolioSnapshot } from "../../src/types/portfolio.js";
@@ -15,6 +15,9 @@ const isCashHolding = (holding: Holding) => holding.market === "CASH" || holding
 const isExistingPlanAhead = (existing: DcaPlan, incoming?: DcaPlan) => {
   if (!existing.lastRunAt) return false;
   if (!incoming) return true;
+
+  const existingUpdatedAt = Math.max(timestampMs(existing.updatedAt), timestampMs(existing.lastRunAt));
+  if (timestampMs(incoming.updatedAt) >= existingUpdatedAt) return false;
 
   return (
     timestampMs(existing.lastRunAt) > timestampMs(incoming.lastRunAt) ||
@@ -51,13 +54,50 @@ const mergeSnapshots = (
     .slice(0, 500);
 };
 
+const planUpdatedMs = (plan: DcaPlan) =>
+  Math.max(timestampMs(plan.updatedAt), timestampMs(plan.lastRunAt), timestampMs(plan.createdAt));
+
+const mergeDeletedDcaPlans = (
+  existingDeletedPlans: DeletedDcaPlan[] = [],
+  incomingDeletedPlans: DeletedDcaPlan[] = []
+) => {
+  const byId = new Map<string, DeletedDcaPlan>();
+
+  for (const deleted of existingDeletedPlans) {
+    byId.set(deleted.id, deleted);
+  }
+  for (const deleted of incomingDeletedPlans) {
+    const current = byId.get(deleted.id);
+    if (!current || timestampMs(deleted.deletedAt) >= timestampMs(current.deletedAt)) {
+      byId.set(deleted.id, deleted);
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((first, second) => timestampMs(second.deletedAt) - timestampMs(first.deletedAt))
+    .slice(0, 1000);
+};
+
 export const mergeCloudPortfolioPayload = (
   incoming: BackupPayload,
   existing: BackupPayload,
   now = new Date()
 ): BackupPayload => {
-  const incomingPlans = new Map((incoming.dcaPlans ?? []).map((plan) => [plan.id, plan]));
-  const existingPlans = existing.dcaPlans ?? [];
+  const deletedDcaPlans = mergeDeletedDcaPlans(existing.deletedDcaPlans, incoming.deletedDcaPlans);
+  const deletedPlanById = new Map(deletedDcaPlans.map((plan) => [plan.id, plan]));
+  const isDeletedPlan = (plan: DcaPlan) => {
+    const deleted = deletedPlanById.get(plan.id);
+    return Boolean(deleted && timestampMs(deleted.deletedAt) >= planUpdatedMs(plan));
+  };
+
+  const incomingPlanList = (incoming.dcaPlans ?? []).filter((plan) => !isDeletedPlan(plan));
+  const existingPlans = (existing.dcaPlans ?? []).filter((plan) => !isDeletedPlan(plan));
+  const normalizedIncoming: BackupPayload = {
+    ...incoming,
+    dcaPlans: incomingPlanList.sort((first, second) => first.nextRunAt.localeCompare(second.nextRunAt)),
+    deletedDcaPlans
+  };
+  const incomingPlans = new Map(incomingPlanList.map((plan) => [plan.id, plan]));
   const protectedPlanIds = new Set<string>();
   const protectedHoldingIds = new Set<string>();
   const protectedCashCurrencies = new Set<Holding["currency"]>();
@@ -87,7 +127,7 @@ export const mergeCloudPortfolioPayload = (
   }
 
   if (!protectedPlanIds.size && !protectedAdjustmentIds.size) {
-    return incoming;
+    return normalizedIncoming;
   }
 
   const existingCashByCurrency = new Map(
@@ -115,7 +155,7 @@ export const mergeCloudPortfolioPayload = (
     }
   }
 
-  const dcaPlans = new Map((incoming.dcaPlans ?? []).map((plan) => [plan.id, plan]));
+  const dcaPlans = new Map(incomingPlanList.map((plan) => [plan.id, plan]));
   for (const plan of existingPlans) {
     if (protectedPlanIds.has(plan.id)) {
       dcaPlans.set(plan.id, plan);
@@ -138,6 +178,7 @@ export const mergeCloudPortfolioPayload = (
     dcaPlans: Array.from(dcaPlans.values()).sort((first, second) =>
       first.nextRunAt.localeCompare(second.nextRunAt)
     ),
+    deletedDcaPlans,
     pendingPositionAdjustments: Array.from(pendingPositionAdjustments.values()).sort((first, second) =>
       first.executeAt.localeCompare(second.executeAt)
     ),
